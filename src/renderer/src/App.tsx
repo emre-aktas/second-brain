@@ -9,6 +9,7 @@ import {
   Search,
   Settings,
   Wand2,
+  X,
   type LucideIcon
 } from 'lucide-react'
 import type { UsageBucketDto } from '@shared/ipc'
@@ -80,6 +81,7 @@ function Shell(): React.JSX.Element {
   const setPanel = useApp((s) => s.setPanel)
   const selectedNodeId = useApp((s) => s.selectedNodeId)
   const selectNode = useApp((s) => s.selectNode)
+  const clearFocus = useApp((s) => s.clearFocus)
   const openNode = useApp((s) => s.openNode)
   const focusRequest = useApp((s) => s.focusRequest)
   const pulses = useApp((s) => s.pulses)
@@ -135,6 +137,37 @@ function Shell(): React.JSX.Element {
         window.removeEventListener(event, report)
       }
     }
+  }, [])
+
+  /**
+   * Escape backs out one level of attention.
+   *
+   * The agent's focus first, then the selection — one press per level, so a focus that
+   * arrived while the user was reading does not also cost them their selected note. This is
+   * the keyboard half of the same fix as the empty-canvas click; without it the only way
+   * out of a focus was a gesture nobody would guess at.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+
+      // Not while something is typing or a dialog owns the key.
+      const active = document.activeElement
+      const typing =
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLElement && active.isContentEditable)
+      if (typing) return
+
+      if (useApp.getState().focusRequest) {
+        useApp.getState().clearFocus()
+        return
+      }
+      if (useApp.getState().selectedNodeId) useApp.getState().selectNode(null)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -211,7 +244,13 @@ function Shell(): React.JSX.Element {
           <GraphCanvas
             snapshot={graph}
             selectedId={selectedNodeId}
-            onSelect={selectNode}
+            onSelect={(id) => {
+              selectNode(id)
+              // A click on empty canvas means "I am done looking at that". It cleared the
+              // selection and left the agent's focus in place, which is what kept the
+              // graph dimmed with no way back.
+              if (id === null) clearFocus()
+            }}
             onOpen={openNode}
             onPositionsSettled={(positions) => void api.savePositions(positions).catch(() => undefined)}
             focusRequest={focusRequest}
@@ -260,13 +299,24 @@ function Shell(): React.JSX.Element {
               rotate: settings?.graph.rotate ?? true
             }}
             reduceMotion={reduceMotion}
+            agentBusy={agentState !== 'idle' && agentState !== 'error'}
           />
 
           {focusRequest?.note && (
-            <div className="pointer-events-none absolute left-4 top-4 max-w-md rounded-md border border-primary/25 bg-card/90 px-3 py-2 shadow-sm backdrop-blur-sm">
+            // Bottom-left, beside the other caption the agent writes, because top-left is
+            // where the first-run hint and the legend live and this was covering them.
+            <div className="absolute bottom-14 left-4 flex max-w-md items-start gap-2 rounded-md border border-primary/25 bg-card/90 px-3 py-2 shadow-sm backdrop-blur-sm">
               <p className="text-[12.5px] leading-relaxed text-foreground text-pretty">
                 {focusRequest.note}
               </p>
+              <button
+                type="button"
+                onClick={clearFocus}
+                aria-label="Stop focusing"
+                className="-mr-1 mt-px grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-foreground active:scale-[0.94]"
+              >
+                <X className="size-3.5" />
+              </button>
             </div>
           )}
 

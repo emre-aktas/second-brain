@@ -18,6 +18,7 @@ import { InboxPopover } from './InboxPopover'
 import { AttachButton, AttachmentStrip, readImageFiles } from './Attachments'
 import { QuestionCard } from './QuestionCard'
 import { TouchedNotes, touchedNotes } from './TouchedNotes'
+import { LiveTurnMeter, TurnMeter } from './TurnMeter'
 
 const CAPABILITY_LABEL: Record<AgentCapability, string> = {
   'read-only': 'Read only',
@@ -175,6 +176,11 @@ export function ChatPanel(): React.JSX.Element {
           {busy && questions.length === 0 && !streaming?.text && (
             <ProgressLine state={agentState} step={activeStep} />
           )}
+
+          {/* Under whatever the turn is currently showing — the progress line before any
+              text arrives, the streaming reply after. One place, so the numbers do not
+              appear to move house halfway through the answer. */}
+          {busy && questions.length === 0 && <LiveTurnMeter className="px-0.5" />}
         </div>
       </ScrollArea>
 
@@ -512,6 +518,21 @@ function TurnView({
           })}
 
           <TouchedNotes notes={touched} onOpenNode={onOpenNode} />
+
+          {/* Last, and the quietest line in the turn. Taken from the final assistant
+              message because that is the one the `result` frame stamps — a turn with
+              several messages has one duration, not one per message. */}
+          {(() => {
+            const meta = turn.assistantMessages.at(-1)?.meta
+            return (
+              <TurnMeter
+                durationMs={meta?.durationMs}
+                inputTokens={meta?.inputTokens}
+                outputTokens={meta?.outputTokens}
+                className="mt-0.5"
+              />
+            )
+          })()}
         </div>
       )}
     </div>

@@ -106,6 +106,8 @@ interface AppState {
   selectNode: (id: string | null) => void
   openNode: (id: string) => void
   focusNodes: (ids: string[], note?: string | null) => void
+  /** Stop attending to whatever the agent pointed at. */
+  clearFocus: () => void
 
   sendMessage: (text: string, extra?: Partial<AgentTurnOptions>) => Promise<void>
   interrupt: () => void
@@ -158,6 +160,21 @@ export interface ChatRuntime {
   agentState: AgentState
   /** Friendly label for whatever the agent is doing in this chat right now. */
   activeStep: string | null
+  /**
+   * When the running turn started, or null when nothing is running.
+   *
+   * On the chat rather than in the component that displays it, for two reasons: a
+   * component captures the moment it mounted, so switching away and back would restart the
+   * clock at zero; and a turn can be running in a chat that is not on screen.
+   */
+  turnStartedAt: number | null
+  /**
+   * Tokens the running turn has spent so far. Flat scalars, deliberately: `activeChat`
+   * hands back a fresh object on every patch, so only field-level selectors keep the rest
+   * of the app from re-rendering, and a selector can only compare a number by identity.
+   */
+  liveInputTokens: number
+  liveOutputTokens: number
 }
 
 /**
@@ -170,7 +187,10 @@ const EMPTY_CHAT: ChatRuntime = {
   messages: [],
   streaming: null,
   agentState: 'idle',
-  activeStep: null
+  activeStep: null,
+  turnStartedAt: null,
+  liveInputTokens: 0,
+  liveOutputTokens: 0
 }
 
 /** The conversation on screen. */
@@ -342,6 +362,16 @@ export const useApp = create<AppState>((set, get) => ({
   focusNodes: (ids, note = null) =>
     set({ focusRequest: { ids, note, stamp: Date.now() } }),
 
+  /**
+   * The way out of a focus.
+   *
+   * There was none. `focusRequest` was write-only, and since a focus puts every node
+   * outside it at a fifth of its opacity, the whole graph stayed washed out for the rest
+   * of the session — the state the user described as not being able to get back to
+   * unselected. Bound to clicking empty canvas and to Escape.
+   */
+  clearFocus: () => set({ focusRequest: null, probeLabel: null }),
+
   async sendMessage(text, extra) {
     const trimmed = text.trim()
     // An image on its own is a valid turn — "what is wrong with this?" needs no words.
@@ -501,6 +531,9 @@ async function hydrateGenUi(messages: ChatMessage[], set: Setter): Promise<void>
   }))
 }
 
+/** Cleared and re-armed by each probe, so only the newest caption is on a clock. */
+let probeCaptionTimer: ReturnType<typeof setTimeout> | null = null
+
 function wireEvents(set: Setter, get: () => AppState): void {
   onEvent('graph:changed', () => {
     void get().refreshGraph()
@@ -523,6 +556,17 @@ function wireEvents(set: Setter, get: () => AppState): void {
    * of the answer arriving.
    */
   onEvent('graph:probe', ({ nodeIds, label }) => {
+    // The caption outlives the sweep it describes by design — long enough to read — but it
+    // had no expiry at all, so "Looking for <last week's query>" reappeared whenever the
+    // graph area was remounted, and an unlabelled probe ran under the previous one's
+    // caption. Held here rather than in the component because the component can be
+    // unmounted mid-sweep and would take its timer with it.
+    if (probeCaptionTimer !== null) clearTimeout(probeCaptionTimer)
+    probeCaptionTimer = setTimeout(() => {
+      probeCaptionTimer = null
+      set({ probeLabel: null })
+    }, PROBE_SWEEP_MS + 2600)
+
     const now = performance.now()
     const step = Math.min(PROBE_STEP_MS, PROBE_SWEEP_MS / Math.max(1, nodeIds.length))
 
@@ -611,7 +655,18 @@ function wireEvents(set: Setter, get: () => AppState): void {
 
     switch (event.type) {
       case 'state':
-        patch({ agentState: event.state })
+        patch((chat) => ({
+          agentState: event.state,
+          // A turn that began without a `usage` frame yet still needs a start time — and a
+          // scheduled run reaches the renderer only through this event, never through
+          // `sendMessage`. Left null, its meter would show nothing at all.
+          turnStartedAt:
+            event.state === 'idle' ? null : (chat.turnStartedAt ?? Date.now())
+        }))
+        break
+
+      case 'usage':
+        patch({ liveInputTokens: event.inputTokens, liveOutputTokens: event.outputTokens })
         break
 
       case 'delta': {
@@ -670,7 +725,14 @@ function wireEvents(set: Setter, get: () => AppState): void {
       }
 
       case 'result': {
-        patch({ agentState: 'idle', streaming: null, activeStep: null })
+        patch({
+          agentState: 'idle',
+          streaming: null,
+          activeStep: null,
+          turnStartedAt: null,
+          liveInputTokens: 0,
+          liveOutputTokens: 0
+        })
         // Cost is a property of the turn the user is watching, not of every turn in
         // flight — a background task finishing must not relabel what this one spent.
         if (isActive) set({ lastTurnCost: event.costUsd })
@@ -682,7 +744,13 @@ function wireEvents(set: Setter, get: () => AppState): void {
       }
 
       case 'error': {
-        patch({ agentState: 'error', streaming: null })
+        patch({
+          agentState: 'error',
+          streaming: null,
+          turnStartedAt: null,
+          liveInputTokens: 0,
+          liveOutputTokens: 0
+        })
         // Only for the chat being looked at. A toast about a scheduled run that
         // failed at 3am, surfaced over whatever the user is doing now, is noise —
         // the Scheduled tab records it as the task's last outcome instead.

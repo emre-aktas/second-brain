@@ -194,6 +194,15 @@ export type ChatBlock =
 export interface ChatMessageMeta {
   costUsd?: number
   durationMs?: number
+  /**
+   * Tokens the turn spent, input and output.
+   *
+   * Input includes cache reads and writes, because they are tokens the request carried and
+   * they are what the footer's usage windows count. Absent on messages written before this
+   * existed, which the reader has to treat as "unknown" rather than as zero.
+   */
+  inputTokens?: number
+  outputTokens?: number
   model?: string
   numTurns?: number
   isError?: boolean
@@ -283,6 +292,8 @@ export type AgentEvent =
   | { type: 'session'; sessionId: string; claudeSessionId: string; model?: string; tools?: string[] }
   | { type: 'state'; sessionId: string; state: AgentState; detail?: string }
   | { type: 'delta'; sessionId: string; messageId: string; kind: 'text' | 'thinking'; text: string }
+  /** Running token total for the turn, as the CLI reports it. Cheap and frequent. */
+  | { type: 'usage'; sessionId: string; inputTokens: number; outputTokens: number }
   | {
       type: 'message'
       sessionId: string

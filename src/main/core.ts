@@ -123,6 +123,18 @@ export class BrainCore {
   updateSettings(patch: DeepPartial<Settings>): Settings {
     const next = this.settingsStore.update(patch)
     this.broadcastFn('settings:changed', next)
+
+    // Two of the graph settings are *query* parameters, not draw parameters: whether tags
+    // and inferred edges are in the snapshot at all is decided in SQL (`db/graph.ts`).
+    // Broadcasting the new settings therefore changed nothing on screen — the renderer
+    // held a snapshot built under the old ones, and the toggle appeared to do nothing
+    // until an unrelated edit happened to invalidate it. Done here rather than in the
+    // renderer so every window agrees, including a popped-out tool.
+    const graph = patch.graph
+    if (graph && ('showTags' in graph || 'showSimilarEdges' in graph)) {
+      this.markGraphDirty('settings')
+    }
+
     return next
   }
 

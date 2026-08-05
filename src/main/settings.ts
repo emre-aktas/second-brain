@@ -34,7 +34,10 @@ export function defaultSettings(workspacePath: string): Settings {
       showToolActivity: false
     },
     graph: {
-      showTags: true,
+      // Off. A tag sits on the rim with edges crossing the whole canvas, so on a vault
+      // with any history the tags are most of what a first look at the graph shows —
+      // and they are the one kind of node the user never wrote.
+      showTags: false,
       showSimilarEdges: true,
       linkDistance: 70,
       charge: -260,

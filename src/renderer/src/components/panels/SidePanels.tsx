@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AgentEffort, IntegrationRecord, Suggestion } from '@shared/types'
 import { EFFORT_OPTIONS, MODEL_OPTIONS } from '@shared/types'
 import type { PresetDto } from '@shared/ipc'
@@ -730,7 +730,24 @@ export function SettingsPanel(): React.JSX.Element {
                 onChange={(value) => void updateSettings({ graph: { ...settings.graph, charge: -value } })}
               />
             </Row>
-            <Row label="Turn slowly" hint="Drag with the right button, or hold Shift, to orbit it yourself">
+            <Row
+              label="Name everything from"
+              hint="The zoom level at which every node gets its name, not just the hubs"
+            >
+              <RangeInput
+                value={Math.round(settings.graph.labelThreshold * 100)}
+                min={20}
+                max={200}
+                format={(percent) => `${(percent / 100).toFixed(2)}`}
+                onChange={(percent) =>
+                  void updateSettings({ graph: { ...settings.graph, labelThreshold: percent / 100 } })
+                }
+              />
+            </Row>
+            <Row
+              label="Turn slowly"
+              hint="Hold Shift and drag, or drag with the middle button, to orbit it yourself"
+            >
               <Switch
                 checked={settings.graph.rotate}
                 onCheckedChange={(rotate) => void updateSettings({ graph: { ...settings.graph, rotate } })}
@@ -890,28 +907,67 @@ function NumberInput({
   )
 }
 
+/**
+ * A slider that reports on release, not on every pixel.
+ *
+ * Each commit is an IPC round trip, a synchronous write of the whole settings file, a
+ * broadcast to every window and a reheat of the force simulation. Wired straight to
+ * `input`, one drag across the track fired dozens of those — which is what made the graph
+ * controls feel like they were fighting the user. The number beside it still follows the
+ * thumb, so the control has not become less responsive; only the work has moved to the end.
+ */
 function RangeInput({
   value,
   min,
   max,
+  step = 1,
+  format,
   onChange
 }: {
   value: number
   min: number
   max: number
+  step?: number
+  format?: (value: number) => string
   onChange: (value: number) => void
 }): React.JSX.Element {
+  const [draft, setDraft] = useState(value)
+  const dragging = useRef(false)
+
+  // Follow the outside world, but never mid-drag: the committed value arrives back through
+  // this prop and would otherwise snap the thumb out from under the pointer.
+  useEffect(() => {
+    if (!dragging.current) setDraft(value)
+  }, [value])
+
+  const commit = (next: number): void => {
+    dragging.current = false
+    if (next !== value) onChange(next)
+  }
+
   return (
     <div className="flex items-center gap-2">
       <input
         type="range"
         min={min}
         max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        step={step}
+        value={draft}
+        onChange={(event) => {
+          dragging.current = true
+          setDraft(Number(event.target.value))
+        }}
+        onPointerUp={(event) => commit(Number(event.currentTarget.value))}
+        onPointerCancel={(event) => commit(Number(event.currentTarget.value))}
+        // The keyboard path never sees a pointer event, and a setting that only responds
+        // to a mouse is not reachable at all for anyone driving this from the keyboard.
+        onKeyUp={(event) => commit(Number(event.currentTarget.value))}
+        onBlur={(event) => commit(Number(event.currentTarget.value))}
         className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-secondary accent-primary"
       />
-      <span className="w-8 text-right text-[11px] tabular-nums text-muted-foreground">{value}</span>
+      <span className="w-8 text-right text-[11px] tabular-nums text-muted-foreground">
+        {format ? format(draft) : draft}
+      </span>
     </div>
   )
 }

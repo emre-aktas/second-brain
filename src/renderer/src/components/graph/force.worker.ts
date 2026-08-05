@@ -198,6 +198,19 @@ function ringRadius(level: number, settings: ForceSettings): number {
  * anchors wherever they happen to sit, and a tag is pushed far out, so it orbits
  * the notes it labels instead of sitting among them.
  */
+/**
+ * Repulsion for one node.
+ *
+ * Factored out for the same reason `linkDistanceFor` is: the 'settings' handler has to
+ * re-install this accessor when the slider moves, and a second copy of the expression there
+ * is a second place for it to drift.
+ */
+function chargeStrengthFor(node: SimNode, settings: ForceSettings): number {
+  // Hubs push harder, which opens up space around the parts of the graph that carry the
+  // most meaning.
+  return settings.charge * (1 + Math.min(2.2, node.degree / 9))
+}
+
 function linkDistanceFor(link: SimLink, settings: ForceSettings): number {
   const source = link.source as SimNode
   const target = link.target as SimNode
@@ -293,9 +306,7 @@ function build(
     .force(
       'charge',
       forceManyBody<SimNode>()
-        // Hubs push harder, which opens up space around the parts of the graph
-        // that carry the most meaning.
-        .strength((d) => settings.charge * (1 + Math.min(2.2, d.degree / 9)))
+        .strength((d) => chargeStrengthFor(d, settings))
         .distanceMax(900)
     )
     .force('collide', forceCollide<SimNode>((d) => radiusFor(d.degree) + 5).iterations(2))
@@ -453,13 +464,28 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
 
     case 'settings': {
       if (!simulation) return
+
+      // Kept, not just read. `currentSettings` was write-only, which is why the ring
+      // radius and the rim force went on using the values the graph was built with.
+      currentSettings = { ...currentSettings, ...message.settings }
+
+      // Through the same accessor `build` uses. The old handler installed a *flat*
+      // distance here, so moving the Link distance slider silently threw away the
+      // level-aware spacing — the ring hierarchy collapsed and the only way back was a
+      // restart. Anything that re-applies a force has to re-apply the real function.
       const link = simulation.force('link') as ReturnType<typeof forceLink<SimNode, SimLink>> | undefined
-      link?.distance((l: SimLink) => message.settings.linkDistance * (1.6 - Math.min(1, l.weight)))
+      link?.distance((l: SimLink) => linkDistanceFor(l, currentSettings))
 
       const charge = simulation.force('charge') as ReturnType<typeof forceManyBody<SimNode>> | undefined
-      charge?.strength((d: SimNode) => message.settings.charge * (1 + Math.min(2.2, d.degree / 9)))
+      charge?.strength((d: SimNode) => chargeStrengthFor(d, currentSettings))
 
-      simulation.alpha(0.4)
+      const radial = simulation.force('radial') as ReturnType<typeof forceRadial<SimNode>> | undefined
+      radial?.radius((d: SimNode) => ringRadius(d.level, currentSettings))
+
+      // Never *down*. Set absolutely, a slider nudge truncated a settle that was still
+      // running and reheated a graph that had already come to rest — so the layout jumped
+      // every time the user touched a control. The three sibling handlers already do this.
+      simulation.alpha(Math.max(simulation.alpha(), 0.4))
       runLoop()
       break
     }

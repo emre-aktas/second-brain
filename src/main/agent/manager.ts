@@ -47,6 +47,11 @@ interface Runtime {
   blocks: Map<string, ChatBlock[]>
   streamingMessageId: string | null
   streamedText: string
+  /** The turn's token total, for the message's own record once it finishes. */
+  turnInputTokens: number
+  turnOutputTokens: number
+  /** When the current turn began, so the finished message can carry its duration. */
+  turnStartedAt: number | null
   lastActivity: number
   /** Set for the duration of a turn started by running a saved tool. */
   activeToolRun: { toolId: string } | null
@@ -276,7 +281,16 @@ export class AgentManager {
     runtime.lastActivity = Date.now()
     runtime.activeToolRun = options.toolRun ? { toolId: options.toolRun.toolId } : null
     runtime.activeAction = options.toolAction ?? null
+    // Stamped here rather than in the renderer: a scheduled run has no renderer watching
+    // it, and the duration it records has to be the turn's, not the moment a window
+    // happened to notice.
+    runtime.turnStartedAt = Date.now()
+    runtime.turnInputTokens = 0
+    runtime.turnOutputTokens = 0
     this.emit({ type: 'state', sessionId: session.id, state: 'thinking' })
+    // Zero it on screen too, so the previous answer's total is not what the user watches
+    // for the second or two before the first usage frame arrives.
+    this.emit({ type: 'usage', sessionId: session.id, inputTokens: 0, outputTokens: 0 })
     runtime.proc.send(
       payload,
       attached.map((image) => ({ mediaType: image.mediaType, dataBase64: image.dataBase64 }))
@@ -409,6 +423,9 @@ export class AgentManager {
       blocks: new Map(),
       streamingMessageId: null,
       streamedText: '',
+      turnInputTokens: 0,
+      turnOutputTokens: 0,
+      turnStartedAt: null,
       lastActivity: Date.now(),
       activeToolRun: null,
       activeAction: null
@@ -595,6 +612,21 @@ export class AgentManager {
         break
       }
 
+      case 'usage': {
+        // Straight through. The renderer already re-renders on every text delta, so this
+        // rides a path that is paid for — and it does no work here beyond two assignments,
+        // which is what keeps a live counter off the critical path of the agent's turn.
+        runtime.turnInputTokens = event.inputTokens
+        runtime.turnOutputTokens = event.outputTokens
+        this.emit({
+          type: 'usage',
+          sessionId,
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens
+        })
+        break
+      }
+
       case 'thinking-delta': {
         if (!runtime.streamingMessageId) runtime.streamingMessageId = ulid()
         this.emit({
@@ -675,8 +707,33 @@ export class AgentManager {
             { type: 'text', text: runtime.streamedText }
           ])
         }
+        // What the turn cost, on the message it produced. `durationMs` has been a declared
+        // field on ChatMessageMeta all along and nothing ever wrote it.
+        if (runtime.lastAssistantMessageId) {
+          const ours = runtime.messageIds.get(runtime.lastAssistantMessageId)
+          const blocks = ours ? runtime.blocks.get(ours) : undefined
+          if (ours && blocks) {
+            this.core.chat.updateMessage(ours, blocks, {
+              durationMs:
+                event.durationMs > 0
+                  ? event.durationMs
+                  : runtime.turnStartedAt
+                    ? Date.now() - runtime.turnStartedAt
+                    : undefined,
+              numTurns: event.numTurns,
+              ...(runtime.turnOutputTokens > 0
+                ? {
+                    inputTokens: runtime.turnInputTokens,
+                    outputTokens: runtime.turnOutputTokens
+                  }
+                : {})
+            })
+          }
+        }
+
         runtime.streamingMessageId = null
         runtime.streamedText = ''
+        runtime.turnStartedAt = null
 
         this.core.recordActivity({
           kind: 'agent.turn',

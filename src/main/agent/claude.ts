@@ -208,6 +208,14 @@ export type ClaudeStreamEvent =
       mcpServers?: { name: string; status: string }[]
     }
   | { type: 'text-delta'; text: string }
+  /**
+   * Tokens spent by the turn so far.
+   *
+   * Emitted as the CLI reports them, which is often enough to watch tick. Cumulative for
+   * the whole turn, not for one request: a turn that uses tools is several requests and the
+   * user is watching one answer.
+   */
+  | { type: 'usage'; inputTokens: number; outputTokens: number }
   | { type: 'thinking-delta'; text: string }
   | { type: 'assistant'; blocks: ContentBlock[]; messageId: string | null }
   | { type: 'tool-result'; toolUseId: string; content: string; isError: boolean }
@@ -403,6 +411,12 @@ export class ClaudeProcess {
     const payload = { type: 'user', message: { role: 'user', content } }
 
     this.busy = true
+    // A new turn starts from zero. Not reset, the counter would carry the previous answer's
+    // total and only ever climb for the life of the process.
+    this.turnInput = 0
+    this.turnOutput = 0
+    this.liveInput = 0
+    this.liveOutput = 0
     this.child.stdin.write(`${JSON.stringify(payload)}\n`)
   }
 
@@ -531,8 +545,64 @@ export class ClaudeProcess {
     }
   }
 
+  /**
+   * Token totals for the turn.
+   *
+   * Four numbers rather than two because a turn is a *sequence* of requests — every tool
+   * call ends one and begins another — and only the request in flight is still changing.
+   * `turn*` is what finished requests spent; `live*` is the current one. Adding the live
+   * figure into the total on every delta instead would multiply it by the number of deltas,
+   * which is the shape of mistake that makes a counter look plausible and read ten times
+   * high.
+   */
+  private turnInput = 0
+  private turnOutput = 0
+  private liveInput = 0
+  private liveOutput = 0
+
+  private emitUsage(): void {
+    this.onEvent({
+      type: 'usage',
+      inputTokens: this.turnInput + this.liveInput,
+      outputTokens: this.turnOutput + this.liveOutput
+    })
+  }
+
   private handleStreamEvent(event: Record<string, unknown> | undefined): void {
     if (!event) return
+
+    // A new request within the turn. Bank what the last one spent before reading this one:
+    // `message_start` carries the input side, which is final from the outset because the
+    // prompt is already known — most of it charged as a cache read.
+    if (event['type'] === 'message_start') {
+      this.turnInput += this.liveInput
+      this.turnOutput += this.liveOutput
+
+      const inner = event['message'] as Record<string, unknown> | undefined
+      const usage = inner?.['usage'] as Record<string, unknown> | undefined
+      const number = (key: string): number =>
+        typeof usage?.[key] === 'number' ? (usage[key] as number) : 0
+
+      // Cache reads and writes are counted. They are tokens the request actually carried,
+      // and leaving them out reports a two-hundred-token turn for one that moved a hundred
+      // thousand — which is the number the footer's usage windows are built from.
+      this.liveInput =
+        number('input_tokens') + number('cache_read_input_tokens') + number('cache_creation_input_tokens')
+      this.liveOutput = number('output_tokens')
+      this.emitUsage()
+      return
+    }
+
+    // The live one. `usage.output_tokens` here is the running total for *this* message, so
+    // it is assigned, never added.
+    if (event['type'] === 'message_delta') {
+      const usage = event['usage'] as Record<string, unknown> | undefined
+      if (typeof usage?.['output_tokens'] === 'number') {
+        this.liveOutput = usage['output_tokens'] as number
+        this.emitUsage()
+      }
+      return
+    }
 
     if (event['type'] === 'content_block_delta') {
       const delta = event['delta'] as Record<string, unknown> | undefined

@@ -56,6 +56,15 @@ export interface GraphCanvasProps {
   onNodeAction?: (action: string, node: GraphSnapshot['nodes'][number]) => void
   settings: ForceSettings & { labelThreshold: number; rotate: boolean }
   reduceMotion: boolean
+  /**
+   * The agent is mid-turn.
+   *
+   * A single boolean, and that is the design: the user's complaint was that the app makes
+   * the agent's progress feel slow, so the signal driving this had to be something that
+   * changes twice a turn rather than something recomputed per event. Everything the
+   * animation needs beyond it is already on the canvas.
+   */
+  agentBusy?: boolean
 }
 
 const PULSE_MS = 900
@@ -73,18 +82,31 @@ const HUB_LABEL_DEGREE = 8
 /**
  * Radians per second the graph turns on its own.
  *
- * A full revolution takes about two minutes. Slow enough that it reads as drift rather
- * than as animation — the graph is the home screen, and something that visibly spins is
- * unusable to sit in front of. Fast enough that the parallax is doing the work of saying
- * "this has depth", which a still perspective projection does not manage on its own.
+ * A full revolution takes a little over three minutes. Slow enough that it reads as drift
+ * rather than as animation — the graph is the home screen, and something that visibly
+ * spins is unusable to sit in front of. Fast enough that the parallax is doing the work of
+ * saying "this has depth", which a still perspective projection does not manage on its own.
+ *
+ * Divided by the zoom below, so the number here is the speed at the default scale and the
+ * effective rate is slower whenever the user is looking closely.
  */
-const ROTATE_RATE = 0.052
+const ROTATE_RATE = 0.034
 
 /** Radians of orbit per pixel dragged. A little under a right angle across 250px. */
 const ORBIT_PER_PIXEL = 0.006
 
 /** Floats per node in the projected cache: view x, view y, perspective k, depth. */
 const VIEW_STRIDE = 4
+
+/**
+ * The travelling dash on a live edge.
+ *
+ * Length and gap in screen pixels, and speed in pixels per second. Slow enough to read as
+ * something moving *along* the wire rather than as a flicker — below about 40px/s the eye
+ * loses the direction, above about 120 it stops looking deliberate.
+ */
+const LIVE_DASH: [number, number] = [5, 11]
+const LIVE_DASH_SPEED = 62
 
 export function GraphCanvas({
   snapshot,
@@ -97,7 +119,8 @@ export function GraphCanvas({
   pulses,
   onNodeAction,
   settings,
-  reduceMotion
+  reduceMotion,
+  agentBusy = false
 }: GraphCanvasProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -147,6 +170,15 @@ export function GraphCanvas({
   const lastFrameRef = useRef(0)
   /** Node indices sorted back-to-front, reused between frames. */
   const orderRef = useRef<Int32Array>(new Int32Array(0))
+  /**
+   * Nodes this turn has touched — read, written, or focused.
+   *
+   * Accumulated across the turn rather than taken from the pulses alone, because a pulse
+   * lasts under a second and a turn lasts minutes: keyed on pulses only, the wiring would
+   * light for a moment and then go dead while the agent was still plainly working. Cleared
+   * when the turn ends, so the graph does not stay lit.
+   */
+  const liveIdsRef = useRef<Set<string>>(new Set())
   const tweenRef = useRef(new CameraTween())
   const viewportRef = useRef({ width: 1, height: 1 })
   const dprRef = useRef(1)
@@ -202,7 +234,18 @@ export function GraphCanvas({
     return map
   }, [snapshot])
 
-  const focusIds = useMemo(() => new Set(focusRequest?.ids ?? []), [focusRequest])
+  /**
+   * The focused ids that are actually in the graph.
+   *
+   * Unfiltered, a focus on a note that has since been trashed — or on one the snapshot
+   * capped out — dimmed every node and highlighted none, leaving the graph uniformly grey
+   * with nothing to look at and no camera move to explain it. Filtered, a wholly stale
+   * focus is simply nothing.
+   */
+  const focusIds = useMemo(
+    () => new Set((focusRequest?.ids ?? []).filter((id) => nodeById.has(id))),
+    [focusRequest, nodeById]
+  )
 
   /* ---------------------------------------------------------------- worker */
 
@@ -416,6 +459,26 @@ export function GraphCanvas({
     document.addEventListener('visibilitychange', onChange)
     return () => document.removeEventListener('visibilitychange', onChange)
   }, [])
+
+  /* ------------------------------------------------------ the live wiring */
+
+  useEffect(() => {
+    if (!agentBusy) {
+      // Ending the turn is the only thing that empties this. Doing it here rather than on
+      // a timer means the wiring goes quiet at exactly the moment the answer lands.
+      if (liveIdsRef.current.size > 0) {
+        liveIdsRef.current = new Set()
+        needsDrawRef.current = true
+      }
+      return
+    }
+
+    const next = liveIdsRef.current
+    const before = next.size
+    for (const pulse of pulses) next.add(pulse.id)
+    for (const id of focusIds) next.add(id)
+    if (next.size !== before) needsDrawRef.current = true
+  }, [agentBusy, pulses, focusIds])
 
   /* ------------------------------------------------------------ projection */
 
@@ -634,7 +697,11 @@ export function GraphCanvas({
       frame = requestAnimationFrame(render)
 
       const now = performance.now()
-      const tweened = tweenRef.current.sample(now)
+      // Not while the user has hold of the view. Auto-rotation was gated on the gestures
+      // and the tween was not, so a focus arriving mid-drag yanked the camera out from
+      // under the pointer.
+      const gesturing = Boolean(orbitRef.current || dragRef.current || panRef.current)
+      const tweened = gesturing ? null : tweenRef.current.sample(now)
       if (tweened) {
         cameraRef.current = tweened
         needsDrawRef.current = true
@@ -674,7 +741,10 @@ export function GraphCanvas({
       // `at` can be in the future: a staggered sweep schedules its tail ahead of
       // time, and the loop has to stay awake until the last one has finished.
       const hasLivePulse = !reduceMotion && pulses.some((pulse) => now < pulse.at + PULSE_MS)
-      if (!needsDrawRef.current && !hasLivePulse) return
+      // A travelling dash is only travelling if the frames keep coming. Bounded by the
+      // turn, which is the whole reason this is gated on a boolean and not left on.
+      const hasLiveWiring = !reduceMotion && agentBusy && liveIdsRef.current.size > 0
+      if (!needsDrawRef.current && !hasLivePulse && !hasLiveWiring) return
       needsDrawRef.current = false
 
       const canvas = canvasRef.current
@@ -826,8 +896,12 @@ export function GraphCanvas({
             !isTagEdge(edge) && edge.kind !== 'similar' && (dimming ? !inAttention : true),
           {
             color: theme.edge,
-            width: band === 'near' ? 1.15 : 0.85,
-            alpha: (dimming ? 0.1 : 0.34) * (band === 'near' ? 1.2 : 0.55)
+            // Nothing below 1.0 CSS px. At devicePixelRatio 1 a 0.85px stroke is spread
+            // across two pixel rows by antialiasing and loses roughly a further sixth of
+            // its weight on top of the band multiplier — so the far band was being dimmed
+            // twice, once on purpose. The depth cue is carried entirely in alpha now.
+            width: band === 'near' ? 1.15 : 1,
+            alpha: (dimming ? 0.1 : 0.44) * (band === 'near' ? 1.15 : 0.46)
           },
           band
         )
@@ -837,8 +911,31 @@ export function GraphCanvas({
       drawEdgePass(
         (edge, inAttention) =>
           edge.kind === 'similar' && !isTagEdge(edge) && (dimming ? !inAttention : true),
-        { color: theme.edge, width: 1, alpha: dimming ? 0.06 : 0.2, dash: [2, 4] }
+        { color: theme.edge, width: 1, alpha: dimming ? 0.06 : 0.24, dash: [2, 4] }
       )
+
+      /**
+       * The agent's own wiring, while it is working.
+       *
+       * Drawn after the resting passes so it reads as something added on top rather than a
+       * different kind of link, and offset over time so the dashes travel from one end to
+       * the other — the thing the user asked for: the lines move while the connection is
+       * in progress. It costs one extra stroke over a subset of the edges, and nothing at
+       * all when the agent is idle.
+       *
+       * The dash offset is derived from the clock rather than accumulated, so a dropped
+       * frame changes nothing and there is no state to reset.
+       */
+      if (agentBusy && liveIdsRef.current.size > 0) {
+        const live = liveIdsRef.current
+        const offset = reduceMotion ? 0 : -((now / 1000) * LIVE_DASH_SPEED) % (LIVE_DASH[0] + LIVE_DASH[1])
+        ctx.lineDashOffset = offset
+        drawEdgePass(
+          (edge) => live.has(edge.src) || live.has(edge.dst),
+          { color: theme.halo, width: 1.5, alpha: 0.62, dash: LIVE_DASH }
+        )
+        ctx.lineDashOffset = 0
+      }
 
       /**
        * Tag membership: a whisper at rest, and properly drawn when relevant.
@@ -854,7 +951,7 @@ export function GraphCanvas({
           (dimming ? attention.has(edge.src) || attention.has(edge.dst) : true),
         dimming
           ? { color: theme.edgeStrong, width: 1, alpha: 0.4, dash: [1, 3] }
-          : { color: theme.edge, width: 1, alpha: 0.07, dash: [1, 5] }
+          : { color: theme.edge, width: 1, alpha: 0.085, dash: [1, 5] }
       )
 
       // Everything inside the current attention, over the top.
