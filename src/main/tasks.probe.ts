@@ -15,8 +15,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Db } from './db/sqlite'
 import { migrate } from './db/schema'
-import { TaskStore } from './db/tasks'
+import { TaskRunStore, TaskStore } from './db/tasks'
 import { NodeStore } from './db/nodes'
+import { ChatStore } from './db/chat'
 import { KvStore, SuggestionStore } from './db/meta'
 import { buildHeartbeat } from './tasks/heartbeat'
 import { nextRun } from '@shared/schedule'
@@ -244,6 +245,76 @@ check(
   'the brief tells it how to say nothing',
   withSuggestion.prompt.includes('Nothing to report.')
 )
+
+/* ------------------------------------------------------- runs get their own chat */
+
+// The point of the whole change: one chat per task meant that chat held one Claude
+// session id, and every run resumed it, so run N replayed runs 1..N-1. These assert the
+// property that makes a fresh chat fix it — a new session has no id to resume.
+
+console.log('\nper-run chats')
+
+const chat = new ChatStore(db)
+const runs = new TaskRunStore(db)
+
+const runA = chat.createSession('Slack digest — Aug 5, 09:00')
+const runB = chat.createSession('Slack digest — Aug 5, 10:00')
+check('two runs are two different chats', runA.id !== runB.id)
+check('a fresh chat has nothing to resume', runA.claudeSessionId === null && runB.claudeSessionId === null)
+
+// What the old design did: one chat carrying a Claude session id forward.
+chat.setClaudeSessionId(runA.id, 'claude-session-1')
+check('a chat that has run once does carry one', chat.getSession(runA.id)?.claudeSessionId === 'claude-session-1')
+check('and the next run, being a new chat, still does not', chat.getSession(runB.id)?.claudeSessionId === null)
+
+const rA = runs.start(slack.id, runA.id)
+const rB = runs.start(slack.id, runB.id)
+check('a run starts as running', runs.get(rA.id)?.status === 'running')
+check('and is not counted as finished', runs.get(rA.id)?.finishedAt === null)
+
+runs.finish(rA.id, 'ok', 'found three things')
+check('finishing records the outcome', runs.get(rA.id)?.status === 'ok')
+check('and the summary', runs.get(rA.id)?.summary === 'found three things')
+check('and stamps a finish time', (runs.get(rA.id)?.finishedAt ?? 0) > 0)
+
+const history = runs.forTask(slack.id)
+check('history is newest first', history[0]?.id === rB.id, history.map((r) => r.id))
+check('and holds both runs', history.length === 2)
+check('a run is findable by its chat', runs.bySession(runA.id)?.id === rA.id)
+
+// A crash leaves 'running' rows that nothing else would ever close.
+const closed = runs.closeStale()
+check('a stale run is closed at startup', closed === 1, closed)
+check('and reads as an error rather than as still working', runs.get(rB.id)?.status === 'error')
+
+/* --------------------------------------------------------------- retiring chats */
+
+console.log('\nretiring old run chats')
+
+// Nothing is offered up under the keep count.
+check('nothing is trimmable while under the limit', runs.trimmable(slack.id, 40, () => false).length === 0)
+
+// Above it, the oldest go — but never one the user replied in, and never one a window
+// has open. Both of those were the reviewer's catch: a run someone answered is a
+// conversation, and deleting the open one misroutes the next message they type.
+const trimmable = runs.trimmable(slack.id, 1, () => false)
+check('above the limit, the oldest is offered up', trimmable.length === 1 && trimmable[0] === runA.id, trimmable)
+check('a protected chat is spared', runs.trimmable(slack.id, 1, (id) => id === runA.id).length === 0)
+
+// The outcome outlives the chat.
+runs.clearSession(runA.id)
+check('clearing the chat keeps the run', runs.get(rA.id)?.status === 'ok')
+check('and forgets only the chat', runs.get(rA.id)?.sessionId === null)
+check('so history never develops holes', runs.forTask(slack.id).length === 2)
+
+// A user reply is what makes a chat worth keeping.
+chat.addMessage({ sessionId: runB.id, role: 'user', blocks: [{ type: 'text', text: 'hi' }], ts: Date.now() })
+check('one user message is the injected prompt alone', chat.userMessageCount(runB.id) === 1)
+chat.addMessage({ sessionId: runB.id, role: 'user', blocks: [{ type: 'text', text: 'and again' }], ts: Date.now() })
+check('two means a person joined in', chat.userMessageCount(runB.id) === 2)
+
+runs.deleteForTask(slack.id)
+check('deleting a task takes its history', runs.forTask(slack.id).length === 0)
 
 db.close()
 rmSync(work, { recursive: true, force: true })

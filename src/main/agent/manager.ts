@@ -251,13 +251,17 @@ export class AgentManager {
       role: 'user',
       blocks: userBlocks,
       ts: Date.now(),
-      ...(options.toolRun ? { meta: { toolRun: options.toolRun } } : {})
+      ...(options.toolRun ? { meta: { toolRun: options.toolRun } } : {}),
+      ...(options.taskRun ? { meta: { taskRun: options.taskRun } } : {})
     })
     this.emit({ type: 'message', sessionId: session.id, message: userMessage })
 
     // First real message names the conversation. A tool run names it after the
     // tool, since the generated prompt is not something the user wrote.
-    if (this.core.chat.messageCount(session.id) === 1) {
+    // A scheduled run's chat is already named after the task and the time it ran, so
+    // it is left alone — renaming it to the first eighty characters of the injected
+    // prompt would title every check-in "This is your hourly check-in. Nobody asked…".
+    if (!options.taskRun && this.core.chat.messageCount(session.id) === 1) {
       this.core.chat.renameSession(
         session.id,
         options.toolRun?.toolName ?? text.slice(0, 80).replace(/\s+/g, ' ').trim()
@@ -302,6 +306,17 @@ export class AgentManager {
       this.core.settings.model,
       this.core.settings.effort
     )
+  }
+
+  /**
+   * Whether a turn is still in flight for this session.
+   *
+   * The scheduler needs it to tell two things apart that both surface as an `error`
+   * event: a process that has died, and one that reported a rate limit and is still
+   * retrying. Killing the second aborts a turn that was going to succeed.
+   */
+  isBusy(sessionId: string): boolean {
+    return this.runtimes.get(sessionId)?.proc.isBusy ?? false
   }
 
   capabilityOf(sessionId: string): AgentCapability {

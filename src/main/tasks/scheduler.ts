@@ -35,6 +35,15 @@ export class Scheduler {
   /** Fires whenever a task's stored state changes, so the Scheduled tab can refresh. */
   onChanged: (() => void) | null = null
 
+  /**
+   * The sessions a window currently has on screen.
+   *
+   * Set by the app. Retiring a chat the renderer is displaying would leave it pointing
+   * at a deleted row, and the next message the user typed would silently land in a
+   * different conversation.
+   */
+  openSessions: (() => string[]) | null = null
+
   constructor(
     private core: BrainCore,
     private agent: AgentManager
@@ -203,10 +212,12 @@ export class Scheduler {
       return finish('error', 'This task has no prompt, so there is nothing to run.', null)
     }
 
-    // Its own chat, created on first run. A scheduled run must never appear in the
-    // middle of the conversation the user is having, and keeping one thread per task
-    // makes its history readable as a series — successive digests in one place.
-    const sessionId = this.sessionFor(task)
+    // A fresh chat for every run, which is the fix for the real problem: one chat per
+    // task held one Claude session id, and `send` resumes it (manager.ts), so run N
+    // replayed runs 1..N-1 and the context grew without limit. A new chat has no
+    // session id to resume, so the process starts clean every time.
+    const sessionId = this.sessionForRun(task)
+    const runRow = this.core.taskRuns.start(task.id, sessionId)
 
     log.info(`running "${task.name}"${manual ? ' (by hand)' : ''} in session ${sessionId.slice(-6)}`)
 
@@ -214,12 +225,18 @@ export class Scheduler {
       await this.agent.send(prompt, {
         sessionId,
         capability: task.capability,
+        // Marks the injected prompt as machine-written so the chat renders the run
+        // rather than showing these instructions as if the user had typed them.
+        taskRun: { taskId: task.id, taskName: task.name, runId: runRow.id },
         ...(task.model ? { model: task.model } : {}),
         ...(task.effort ? { effort: task.effort } : {})
       })
 
       const reply = await this.agent.awaitTurn(sessionId)
       const summary = reply.trim().slice(0, 2000) || 'Nothing to report.'
+
+      this.core.taskRuns.finish(runRow.id, 'ok', summary)
+      this.retire(task.id, sessionId)
 
       this.core.recordActivity({
         kind: 'task.ran',
@@ -232,18 +249,69 @@ export class Scheduler {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.warn(`task "${task.name}" did not finish: ${message}`)
+      this.core.taskRuns.finish(runRow.id, 'error', message)
+
+      // Deliberately conditional. `awaitTurn` rejects on any error event, and one of
+      // those is emitted mid-turn when the CLI reports a rate limit and then carries
+      // on retrying — killing the process there would abort a turn that was going to
+      // succeed. Only a process that has actually stopped working gets cleaned up,
+      // and `interrupt` is used rather than a bare stop because it also releases any
+      // question the turn was blocked on, which would otherwise hang for its full
+      // four-minute timeout and then resolve into a dead child.
+      if (!this.agent.isBusy(sessionId)) this.agent.interrupt(sessionId)
+
       return finish('error', message, sessionId)
     }
   }
 
-  private sessionFor(task: ScheduledTask): string {
-    if (task.sessionId && this.core.chat.getSession(task.sessionId)) return task.sessionId
-
-    const session = this.core.chat.createSession(task.name)
-    // Archived so it stays out of the recent-conversations list until it has
-    // something to say; the Scheduled tab is where these are found from.
+  /**
+   * A chat for one run.
+   *
+   * Archived from the moment it exists, so a run never appears in the recent
+   * conversations list — the Scheduled tab is the door to these. `scheduled_tasks
+   * .session_id` still tracks the newest run's chat, which is what the panel's
+   * collapsed line opens.
+   */
+  private sessionForRun(task: ScheduledTask): string {
+    const stamp = new Date().toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+    const session = this.core.chat.createSession(`${task.name} — ${stamp}`)
     this.core.chat.archiveSession(session.id, true)
     this.core.tasks.setSession(task.id, session.id)
     return session.id
+  }
+
+  /**
+   * How many of a task's run chats are kept.
+   *
+   * Generous on purpose: the hourly check-in would burn through a smaller number in a
+   * day, and the point of keeping them is that a run is openable weeks later. Only the
+   * chats go — the run's outcome stays in `task_runs` for ever, so the history list
+   * never develops holes.
+   */
+  private static readonly KEEP_RUN_CHATS = 40
+
+  private retire(taskId: string, justUsed: string): void {
+    const openElsewhere = new Set(this.openSessions?.() ?? [])
+    const doomed = this.core.taskRuns.trimmable(taskId, Scheduler.KEEP_RUN_CHATS, (sessionId) => {
+      if (sessionId === justUsed || openElsewhere.has(sessionId)) return true
+      // A run the user replied in is a conversation, not a disposable record.
+      return this.core.chat.userMessageCount(sessionId) > 1
+    })
+
+    for (const sessionId of doomed) {
+      try {
+        this.agent.interrupt(sessionId)
+        this.core.taskRuns.clearSession(sessionId)
+        this.core.chat.deleteSession(sessionId)
+      } catch (err) {
+        log.warn(`could not retire the chat for an old run: ${String(err)}`)
+      }
+    }
+    if (doomed.length > 0) log.info(`retired ${doomed.length} old run chat(s)`)
   }
 }

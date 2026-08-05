@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
+import { CalendarClock, ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toolIcon } from '@/components/panels/ToolsPanel'
 import type { AgentCapability, ChatBlock, ChatImage, ChatMessage } from '@shared/types'
@@ -385,6 +385,9 @@ function TurnView({
   onFocusNodes: (ids: string[], note?: string | null) => void
 }): React.JSX.Element {
   const toolRun = turn.userMessage?.meta?.toolRun ?? null
+  const taskRun = turn.userMessage?.meta?.taskRun ?? null
+  // Either kind of generated prompt is hidden; only one can be set.
+  const generated = toolRun !== null || taskRun !== null
 
   // Flatten the turn, keeping block order across messages.
   const allBlocks = turn.assistantMessages.flatMap((message) => message.blocks)
@@ -399,8 +402,9 @@ function TurnView({
   return (
     <div className="flex flex-col gap-4">
       {turn.userMessage && toolRun && <ToolRunHeader run={toolRun} />}
+      {turn.userMessage && taskRun && <TaskRunHeader run={taskRun} />}
 
-      {turn.userMessage && !toolRun && (
+      {turn.userMessage && !generated && (
         <div className="flex justify-end">
           <div className="max-w-[85%] rounded-lg rounded-br-sm bg-primary/12 px-3 py-2">
             {(() => {
@@ -444,7 +448,7 @@ function TurnView({
             'flex flex-col gap-2.5',
             // A tool run gets its own framed surface so its output reads as
             // something the tool produced, not as a chat reply.
-            toolRun && 'rounded-lg border border-border bg-card/40 px-3 py-3'
+            generated && 'rounded-lg border border-border bg-card/40 px-3 py-3'
           )}
         >
           {!showActivity && stepBlocks.length > 0 && <StepSummary blocks={stepBlocks} />}
@@ -524,6 +528,32 @@ function ToolRunHeader({
           {supplied.map(([key, value]) => `${key}: ${value}`).join(' · ')}
         </span>
       )}
+    </div>
+  )
+}
+
+/**
+ * A scheduled run, in place of the instructions that started it.
+ *
+ * The prompt behind one of these is generated and often hundreds of words — the hourly
+ * check-in's is a briefing with a list of notes in it. Rendering that as a user message
+ * shows someone their own app talking to itself, so the transcript says which task ran
+ * and when, and the report is the reply below.
+ */
+function TaskRunHeader({
+  run
+}: {
+  run: NonNullable<ChatMessage['meta']>['taskRun']
+}): React.JSX.Element | null {
+  if (!run) return null
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="grid size-6 shrink-0 place-items-center rounded-md bg-primary/12 text-primary">
+        <CalendarClock className="size-3.5" />
+      </span>
+      <span className="text-[12px] font-medium text-foreground">{run.taskName}</span>
+      <span className="text-[11px] text-muted-foreground">ran on its own</span>
     </div>
   )
 }

@@ -163,6 +163,22 @@ export class ChatStore {
     }))
   }
 
+  /**
+   * How many messages in this chat came from the user.
+   *
+   * Used to decide whether a scheduled run's chat is disposable. A run starts with one
+   * injected user message, so anything above one means a person joined in — and a
+   * conversation someone had is not a record to be swept up.
+   */
+  userMessageCount(sessionId: string): number {
+    return (
+      this.db.pluck<number>(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ? AND role = 'user'",
+        [sessionId]
+      ) ?? 0
+    )
+  }
+
   messageCount(sessionId: string): number {
     return (
       this.db.pluck<number>('SELECT COUNT(*) FROM messages WHERE session_id = ?', [sessionId]) ?? 0

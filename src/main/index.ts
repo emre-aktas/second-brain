@@ -13,7 +13,7 @@ import { ToolPreviewer } from './toolPreview'
 import { registerToolScheme, serveToolScheme } from './toolProtocol'
 import { Broadcaster } from './broadcast'
 import { appearance, useAppearanceFrom } from './appearance'
-import { registerIpc, unregisterIpc } from './ipc'
+import { openSessionIds, registerIpc, unregisterIpc } from './ipc'
 import { createLogger, initLogger, onLogEntry } from './logger'
 import { Scheduler } from './tasks/scheduler'
 import { Notifier } from './notify'
@@ -202,6 +202,15 @@ async function bootstrap(): Promise<void> {
 
   scheduler = new Scheduler(core, agent)
   scheduler.onChanged = () => core?.broadcast('tasks:changed')
+
+  // Which chats a window is showing. Retiring one the renderer has open would leave it
+  // pointing at a deleted row, and the next message typed would land somewhere else.
+  scheduler.openSessions = () => openSessionIds()
+
+  // A run left mid-flight by a crash or a kill would read as "still working" for ever;
+  // nothing else would ever close it.
+  const stale = core.taskRuns.closeStale()
+  if (stale > 0) log.info(`closed ${stale} run(s) left open by the last shutdown`)
 
   // A task the agent just created or edited needs its next-run time recomputed, or it
   // keeps the one belonging to the schedule it no longer has.

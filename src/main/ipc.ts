@@ -43,6 +43,30 @@ export interface IpcContext {
   getWindow: () => BrowserWindow | null
 }
 
+/**
+ * Chats a window has asked to open since launch.
+ *
+ * The main process has no other way to know what is on screen, and it needs to: the
+ * scheduler retires old run chats, and deleting one the renderer is displaying leaves
+ * it pointing at a deleted row — after which the next message the user types silently
+ * lands in a different conversation. Bounded, because this only has to cover "recently",
+ * and every entry is a string the user could reach again anyway.
+ */
+const OPENED_LIMIT = 24
+const recentlyOpened: string[] = []
+
+function rememberOpened(sessionId: string): void {
+  const at = recentlyOpened.indexOf(sessionId)
+  if (at >= 0) recentlyOpened.splice(at, 1)
+  recentlyOpened.unshift(sessionId)
+  if (recentlyOpened.length > OPENED_LIMIT) recentlyOpened.length = OPENED_LIMIT
+}
+
+/** Session ids a window has opened, newest first. */
+export function openSessionIds(): string[] {
+  return [...recentlyOpened]
+}
+
 export function registerIpc(ctx: IpcContext): void {
   const { core, agent, curator, integrations, scheduler } = ctx
 
@@ -218,6 +242,9 @@ export function registerIpc(ctx: IpcContext): void {
       if (task?.kind === 'heartbeat') {
         core.tasks.setEnabled(id, false, null)
       } else {
+        // The run history goes with the task. Leaving orphaned rows behind would keep
+        // a deleted task's outcomes queryable for ever with nothing to attach them to.
+        core.taskRuns.deleteForTask(id)
         core.tasks.delete(id)
       }
       core.broadcast('tasks:changed')
@@ -231,12 +258,17 @@ export function registerIpc(ctx: IpcContext): void {
 
     'tasks:openSession': ({ id }) => {
       const task = core.tasks.get(id)
-      if (!task?.sessionId) return { sessionId: null }
-      // Un-archived on the way out: the user is opening it deliberately, so it
-      // belongs in the conversation list from now on.
-      core.chat.archiveSession(task.sessionId, false)
+      // Checked rather than trusted: a run chat can be deleted from the history list,
+      // and `scheduled_tasks.session_id` is not cleared when that happens — returning a
+      // dead id makes the button do nothing with no explanation.
+      if (!task?.sessionId || !core.chat.getSession(task.sessionId)) return { sessionId: null }
+      // Deliberately NOT un-archived. These chats are archived so the conversation list
+      // stays the user's own conversations; with a chat per run, un-archiving on open
+      // would fill that list with scheduled runs. Opening by id needs no un-archiving.
       return { sessionId: task.sessionId }
     },
+
+    'tasks:runs': ({ id, limit }) => core.taskRuns.forTask(id, limit ?? 20),
 
     /* -------------------------------------------------------- saved tools */
 
@@ -496,7 +528,11 @@ export function registerIpc(ctx: IpcContext): void {
     /* --------------------------------------------------------------- chat */
 
     'chat:sessions': () => core.chat.listSessions(),
-    'chat:session': ({ id }) => core.chat.getSession(id) ?? null,
+    'chat:session': ({ id }) => {
+      // Remembered so the scheduler never retires a chat a window is showing.
+      rememberOpened(id)
+      return core.chat.getSession(id) ?? null
+    },
     'chat:createSession': () => core.chat.createSession(),
     'chat:renameSession': ({ id, title }) => {
       core.chat.renameSession(id, title)

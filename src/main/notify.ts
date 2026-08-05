@@ -124,6 +124,10 @@ export class Notifier {
 
     if (task) {
       if (!settings.onProactive) return
+      // Same rule as an ordinary reply, and it matters more now that replying inside a
+      // run's chat is the intended way to follow one up: a toast about a turn the user
+      // is watching is noise.
+      if (!this.unattended()) return
       // The heartbeat is told to say this exact phrase when it has nothing worth
       // raising, and it is meant to be the usual answer. Notifying about it would
       // turn a deliberately quiet feature into an hourly interruption.

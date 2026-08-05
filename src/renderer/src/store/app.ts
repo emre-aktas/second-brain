@@ -557,9 +557,9 @@ function wireEvents(set: Setter, get: () => AppState): void {
   })
 
   onEvent('chat:reveal', ({ sessionId }) => {
-    // A notification was clicked. The chat may be a task's own, which is archived and
-    // therefore absent from the recent list, so the session list is refreshed first —
-    // opening it un-archives it in the main process.
+    // A notification was clicked. The chat may belong to a scheduled run, which is
+    // archived and so absent from the recent list — that is deliberate and it stays
+    // that way: switchSession opens a session by id and does not need it listed.
     void (async () => {
       await get().switchSession(sessionId)
       await get().refreshSessions()

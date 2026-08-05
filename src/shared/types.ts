@@ -206,6 +206,18 @@ export interface ChatMessageMeta {
     icon: string | null
     values: Record<string, string>
   }
+  /**
+   * Set when the scheduler started this turn.
+   *
+   * Same purpose as `toolRun` and for the same reason: the prompt is generated, often
+   * hundreds of words of instructions, and rendering it as a user message shows the
+   * user their own app talking to itself. The chat renders a run header instead.
+   */
+  taskRun?: {
+    taskId: string
+    taskName: string
+    runId: string
+  }
 }
 
 export interface ChatMessage {
@@ -240,6 +252,8 @@ export interface AgentTurnOptions {
   context?: string
   /** Present when a saved tool started this turn. */
   toolRun?: ChatMessageMeta['toolRun']
+  /** Present when the scheduler started this turn. */
+  taskRun?: ChatMessageMeta['taskRun']
   /** Images to send with this turn. */
   images?: ChatImage[]
   /** Present when a button inside a tool started this turn. */
@@ -884,6 +898,24 @@ export interface ScheduledTask {
   lastStatus: TaskStatus | null
   lastSummary: string | null
   runCount: number
+}
+
+/**
+ * One time a scheduled task ran.
+ *
+ * `status` deliberately has no 'skipped': a skip means the pre-check decided not to
+ * spend a turn, so nothing ran and there is nothing to record. Widening it would
+ * invite exactly that mistake.
+ */
+export interface TaskRun {
+  id: string
+  taskId: string
+  /** The run's own chat, or null once that chat has been deleted. */
+  sessionId: string | null
+  status: 'running' | 'ok' | 'error'
+  summary: string
+  startedAt: number
+  finishedAt: number | null
 }
 
 export interface TaskRunResult {

@@ -17,6 +17,7 @@ import type {
   DeepPartial,
   SavedTool,
   ScheduledTask,
+  TaskRun,
   TaskRunResult,
   Settings,
   Suggestion,
@@ -248,8 +249,10 @@ export interface ApiMap {
   'tasks:remove': (payload: { id: string }) => void
   /** Run it now regardless of its schedule. Resolves once the turn has settled. */
   'tasks:runNow': (payload: { id: string }) => TaskRunResult
-  /** The chat a task writes into, so the Scheduled tab can open it. */
+  /** The chat a task's newest run wrote into, so the Scheduled tab can open it. */
   'tasks:openSession': (payload: { id: string }) => { sessionId: string | null }
+  /** A task's run history, newest first. */
+  'tasks:runs': (payload: { id: string; limit?: number }) => TaskRun[]
 
   'tools:list': (payload: void) => SavedTool[]
   'tools:setPinned': (payload: { id: string; pinned: boolean }) => void
@@ -410,6 +413,7 @@ export const API_CHANNELS: ApiChannel[] = [
   'tasks:remove',
   'tasks:runNow',
   'tasks:openSession',
+  'tasks:runs',
   'tools:list',
   'tools:setPinned',
   'tools:remove',

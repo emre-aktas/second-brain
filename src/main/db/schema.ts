@@ -313,6 +313,43 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_tasks_due ON scheduled_tasks(next_run_at)
         WHERE enabled = 1;
     `
+  },
+  {
+    version: 13,
+    name: 'task-runs',
+    up: `
+      -- One row per time a scheduled task actually ran.
+      --
+      -- Runs each get their own chat now. Reusing one chat per task meant that chat
+      -- held one Claude session id, and every run resumed it — so run N replayed runs
+      -- 1..N-1 and the context grew without limit, which on a subscription is real
+      -- money for work nobody asked to see twice. A fresh chat per run has no session
+      -- id to resume, so the process starts clean.
+      --
+      -- Deliberately nothing is backfilled. A backfill would have to insert a
+      -- session_id, migrations run inside a transaction and rethrow, and a row
+      -- pointing at a chat the user has since deleted would take the whole database
+      -- down on launch. Existing tasks simply start their history here; the chat they
+      -- shared is still reachable from scheduled_tasks.session_id.
+      CREATE TABLE IF NOT EXISTS task_runs (
+        id           TEXT PRIMARY KEY,
+        task_id      TEXT NOT NULL,
+        -- The run's own chat. No foreign key on purpose: a chat can be deleted from
+        -- the history list independently, and that should leave the run's outcome
+        -- readable rather than deleting the record of it.
+        session_id   TEXT,
+        -- 'running' | 'ok' | 'error'. Never 'skipped' — a skip is not a run, and
+        -- writing one here would make a task that has never had anything to do look
+        -- as busy as one working every hour.
+        status       TEXT NOT NULL,
+        summary      TEXT NOT NULL DEFAULT '',
+        started_at   INTEGER NOT NULL,
+        finished_at  INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_task_runs_task
+        ON task_runs(task_id, started_at DESC);
+    `
   }
 ]
 
