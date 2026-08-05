@@ -713,7 +713,11 @@ export class AgentManager {
           const ours = runtime.messageIds.get(runtime.lastAssistantMessageId)
           const blocks = ours ? runtime.blocks.get(ours) : undefined
           if (ours && blocks) {
-            this.core.chat.updateMessage(ours, blocks, {
+            // Stored *and* re-emitted. The renderer holds its own copy of the transcript,
+            // so a write that only reaches SQLite is invisible until the session is
+            // reloaded — which is why the finished turn showed no duration at all. The
+            // same trap as `render_ui`, and for the same reason.
+            const updated = this.core.chat.updateMessage(ours, blocks, {
               durationMs:
                 event.durationMs > 0
                   ? event.durationMs
@@ -728,6 +732,10 @@ export class AgentManager {
                   }
                 : {})
             })
+
+            if (updated) {
+              this.emit({ type: 'message', sessionId, message: updated, supersedes: null })
+            }
           }
         }
 

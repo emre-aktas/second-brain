@@ -51,6 +51,23 @@ export function formatTokens(tokens: number): string {
 const LINE = 'text-[10.5px] leading-none tabular-nums text-muted-foreground/70'
 
 /**
+ * What "tokens" means on screen.
+ *
+ * The output side, and that is a deliberate choice measured against real data: across a
+ * couple of thousand recorded requests the input side averages about half a million tokens
+ * each, almost entirely cache reads, because every request in a turn re-reads the whole
+ * conversation. Totalling that honestly gives a number like "477k" for one answer, which is
+ * true, alarming, and not what anybody means by "what did this cost me".
+ *
+ * So the headline is what the model wrote, and the whole breakdown — including the context
+ * carried — is on hover for anyone who wants it. The footer's usage windows are the place
+ * for the full figure; they already report it that way.
+ */
+function breakdown(inputTokens: number, outputTokens: number): string {
+  return `${outputTokens.toLocaleString()} written · ${inputTokens.toLocaleString()} of context read (mostly from cache)`
+}
+
+/**
  * The live meter, for the turn in progress.
  *
  * Reads three scalars from the store and derives everything else. Deriving rather than
@@ -80,12 +97,12 @@ export function LiveTurnMeter({ className }: { className?: string }): React.JSX.
   const elapsed = Math.max(0, now - startedAt)
 
   return (
-    <p className={cn(LINE, className)}>
+    <p className={cn(LINE, className)} title={breakdown(inputTokens, outputTokens)}>
       {formatDuration(elapsed)}
       {outputTokens > 0 && (
         <>
           {' · '}
-          {formatTokens(inputTokens + outputTokens)} tokens
+          {formatTokens(outputTokens)} tokens
         </>
       )}
     </p>
@@ -109,18 +126,14 @@ export function TurnMeter({
   outputTokens?: number
   className?: string
 }): React.JSX.Element | null {
-  const tokens =
-    inputTokens === undefined && outputTokens === undefined
-      ? null
-      : (inputTokens ?? 0) + (outputTokens ?? 0)
-
-  if (!durationMs && !tokens) return null
+  const written = outputTokens ?? 0
+  if (!durationMs && written === 0) return null
 
   return (
-    <p className={cn(LINE, className)}>
+    <p className={cn(LINE, className)} title={breakdown(inputTokens ?? 0, written)}>
       {durationMs ? formatDuration(durationMs) : null}
-      {durationMs && tokens ? ' · ' : null}
-      {tokens ? `${formatTokens(tokens)} tokens` : null}
+      {durationMs && written > 0 ? ' · ' : null}
+      {written > 0 ? `${formatTokens(written)} tokens` : null}
     </p>
   )
 }

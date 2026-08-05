@@ -135,12 +135,52 @@ export class ChatStore {
     return { ...message, id }
   }
 
-  updateMessage(id: string, blocks: ChatBlock[], meta?: ChatMessageMeta): void {
+  /**
+   * Rewrite a message's blocks, and merge anything given for its meta.
+   *
+   * Merged, not replaced. `meta` is one JSON column, so writing a partial object over it
+   * dropped every field the caller had not thought to repeat — the run header a tool or a
+   * scheduled task had put there, or the model the turn used. `COALESCE(?, meta)` only
+   * covers the case of passing nothing at all.
+   *
+   * Returns the stored message so the caller can hand the renderer the same thing the
+   * database now holds, rather than a guess at it.
+   */
+  updateMessage(id: string, blocks: ChatBlock[], meta?: ChatMessageMeta): ChatMessage | null {
+    const merged = meta
+      ? { ...(this.readMeta(id) ?? {}), ...stripUndefined(meta) }
+      : this.readMeta(id)
+
     this.db.run('UPDATE messages SET blocks = ?, meta = COALESCE(?, meta) WHERE id = ?', [
       JSON.stringify(blocks),
-      meta ? JSON.stringify(meta) : null,
+      meta ? JSON.stringify(merged) : null,
       id
     ])
+
+    const row = this.db.get<{ session_id: string; role: string; ts: number }>(
+      'SELECT session_id, role, ts FROM messages WHERE id = ?',
+      [id]
+    )
+    if (!row) return null
+
+    return {
+      id,
+      sessionId: row.session_id,
+      role: row.role as ChatMessage['role'],
+      blocks,
+      ts: row.ts,
+      ...(merged && Object.keys(merged).length > 0 ? { meta: merged } : {})
+    }
+  }
+
+  private readMeta(id: string): ChatMessageMeta | null {
+    const raw = this.db.pluck<string>('SELECT meta FROM messages WHERE id = ?', [id])
+    if (!raw) return null
+    try {
+      return JSON.parse(raw) as ChatMessageMeta
+    } catch {
+      return null
+    }
   }
 
   listMessages(sessionId: string, limit = 500): ChatMessage[] {
@@ -235,4 +275,18 @@ export class ChatStore {
   attachGenUiToMessage(genUiId: string, messageId: string): void {
     this.db.run('UPDATE genui SET message_id = ? WHERE id = ?', [messageId, genUiId])
   }
+}
+
+/**
+ * Drop keys whose value is `undefined`.
+ *
+ * Spreading `{ durationMs: undefined }` over a stored meta replaces a real duration with
+ * nothing — the one shape of merge bug that looks like a write succeeding.
+ */
+function stripUndefined(meta: ChatMessageMeta): ChatMessageMeta {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(meta)) {
+    if (value !== undefined) out[key] = value
+  }
+  return out as ChatMessageMeta
 }

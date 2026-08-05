@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { UsageMeter } from './usage-meter'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -413,10 +414,7 @@ export class ClaudeProcess {
     this.busy = true
     // A new turn starts from zero. Not reset, the counter would carry the previous answer's
     // total and only ever climb for the life of the process.
-    this.turnInput = 0
-    this.turnOutput = 0
-    this.liveInput = 0
-    this.liveOutput = 0
+    this.usage.reset()
     this.child.stdin.write(`${JSON.stringify(payload)}\n`)
   }
 
@@ -505,6 +503,21 @@ export class ClaudeProcess {
     if (type === 'assistant') {
       const inner = message['message'] as Record<string, unknown> | undefined
       const blocks = Array.isArray(inner?.['content']) ? (inner!['content'] as ContentBlock[]) : []
+
+      // The authoritative usage for a finished request, so the number that lands on the
+      // message is the CLI's own rather than a reconstruction from deltas. Deduplicated by
+      // message id inside the meter: the CLI sends one of these frames per content block
+      // and every one repeats the same total, so counting frames counts a request several
+      // times over.
+      if (
+        this.usage.settleRequest(
+          typeof inner?.['id'] === 'string' ? (inner['id'] as string) : null,
+          inner?.['usage'] as Record<string, unknown> | undefined
+        )
+      ) {
+        this.emitUsage()
+      }
+
       this.onEvent({
         type: 'assistant',
         blocks,
@@ -545,27 +558,11 @@ export class ClaudeProcess {
     }
   }
 
-  /**
-   * Token totals for the turn.
-   *
-   * Four numbers rather than two because a turn is a *sequence* of requests — every tool
-   * call ends one and begins another — and only the request in flight is still changing.
-   * `turn*` is what finished requests spent; `live*` is the current one. Adding the live
-   * figure into the total on every delta instead would multiply it by the number of deltas,
-   * which is the shape of mistake that makes a counter look plausible and read ten times
-   * high.
-   */
-  private turnInput = 0
-  private turnOutput = 0
-  private liveInput = 0
-  private liveOutput = 0
+  /** The turn's token arithmetic. Tested on its own against real recorded frames. */
+  private readonly usage = new UsageMeter()
 
   private emitUsage(): void {
-    this.onEvent({
-      type: 'usage',
-      inputTokens: this.turnInput + this.liveInput,
-      outputTokens: this.turnOutput + this.liveOutput
-    })
+    this.onEvent({ type: 'usage', ...this.usage.total })
   }
 
   private handleStreamEvent(event: Record<string, unknown> | undefined): void {
@@ -575,30 +572,17 @@ export class ClaudeProcess {
     // `message_start` carries the input side, which is final from the outset because the
     // prompt is already known — most of it charged as a cache read.
     if (event['type'] === 'message_start') {
-      this.turnInput += this.liveInput
-      this.turnOutput += this.liveOutput
-
       const inner = event['message'] as Record<string, unknown> | undefined
-      const usage = inner?.['usage'] as Record<string, unknown> | undefined
-      const number = (key: string): number =>
-        typeof usage?.[key] === 'number' ? (usage[key] as number) : 0
-
-      // Cache reads and writes are counted. They are tokens the request actually carried,
-      // and leaving them out reports a two-hundred-token turn for one that moved a hundred
-      // thousand — which is the number the footer's usage windows are built from.
-      this.liveInput =
-        number('input_tokens') + number('cache_read_input_tokens') + number('cache_creation_input_tokens')
-      this.liveOutput = number('output_tokens')
+      this.usage.openRequest(
+        typeof inner?.['id'] === 'string' ? (inner['id'] as string) : null,
+        inner?.['usage'] as Record<string, unknown> | undefined
+      )
       this.emitUsage()
       return
     }
 
-    // The live one. `usage.output_tokens` here is the running total for *this* message, so
-    // it is assigned, never added.
     if (event['type'] === 'message_delta') {
-      const usage = event['usage'] as Record<string, unknown> | undefined
-      if (typeof usage?.['output_tokens'] === 'number') {
-        this.liveOutput = usage['output_tokens'] as number
+      if (this.usage.observeOutput(event['usage'] as Record<string, unknown> | undefined)) {
         this.emitUsage()
       }
       return
