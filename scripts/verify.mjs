@@ -62,12 +62,64 @@ const selected = SUITE.filter((entry) => {
   return true
 })
 
+/**
+ * Nothing under src/ or scripts/ may be gitignored.
+ *
+ * First because it is cheap, and because the alternative is what happened: `vault/`
+ * in .gitignore is unanchored, so it matched `src/main/vault/` as well as the
+ * workspace directory it was written for, and eleven source files were never
+ * committed. Nothing local failed — the working tree was complete — and it only
+ * surfaced when CI checked out the repository and could not compile it.
+ */
+function checkNothingSourceIsIgnored() {
+  process.stdout.write('no source file is gitignored'.padEnd(44) + ' ')
+
+  const listed = spawnSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', 'src', 'scripts'], {
+    cwd: root,
+    encoding: 'utf8'
+  })
+
+  // No git, no repository, no check — this is a guard, not a requirement.
+  if (listed.status !== 0) {
+    console.log('skipped (not a git repository)')
+    return null
+  }
+
+  const ignored = (listed.stdout ?? '')
+    .split(String.fromCharCode(10))
+    // trim() takes the carriage return off, so no platform-specific split is needed.
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (ignored.length === 0) {
+    console.log('ok')
+    return null
+  }
+
+  console.log('FAIL')
+  return {
+    label: 'no source file is gitignored',
+    output: [
+      `${ignored.length} file(s) under src/ or scripts/ are excluded by .gitignore and`,
+      'would be missing from a fresh clone:',
+      '',
+      ...ignored.map((file) => `  ${file}`),
+      '',
+      'Run `git check-ignore -v <file>` to find the offending pattern. An unanchored',
+      'directory pattern such as `vault/` matches at every depth; anchor it as `/vault/`.'
+    ].join(String.fromCharCode(10))
+  }
+}
+
 // The GUI probes write PNGs. Somewhere disposable, so a verification run never
 // leaves anything behind in the repo.
 const shots = mkdtempSync(join(tmpdir(), 'brain-verify-'))
 
 const failed = []
 const started = process.hrtime.bigint()
+
+const ignoredFailure = checkNothingSourceIsIgnored()
+if (ignoredFailure) failed.push(ignoredFailure)
 
 for (const entry of selected) {
   const label = entry.file.replace(/^src\//, '')

@@ -15,14 +15,21 @@ release-*/
 # externals resolve, but are matched here too in case that ever changes.
 .brain-runts-*/
 
-# Anything the app itself produces. The vault is the user's own notes and the index
-# is derived from it; neither belongs to the project.
+# Anything the app itself produces. The vault is the user's own notes and the index is
+# derived from it; neither belongs to the project.
+#
+# The leading slashes are not cosmetic. Unanchored, a pattern like `vault/` matches a
+# directory of that name at ANY depth, so it swallowed the app's own source folders as
+# well as the workspace it was written for — eleven files that were never committed,
+# with a working tree that looked complete and only failed once CI checked the
+# repository out and could not compile it. `npm run verify` now guards against exactly
+# this. A workspace only ever lives at the repository root, so anchoring costs nothing.
 *.log
-vault/
-.brain/
-attachments/
-integrations/
-.trash/
+/vault/
+/.brain/
+/attachments/
+/integrations/
+/.trash/
 secrets.enc
 *.db
 *.db-journal
