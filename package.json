@@ -2,7 +2,10 @@
   "name": "second-brain",
   "version": "0.1.0",
   "description": "A physics-driven personal second brain with an embedded Claude agent",
-  "author": "emre@acme.studio",
+  "author": {
+    "name": "Emre Aktaş",
+    "email": "magma017@gmail.com"
+  },
   "license": "MIT",
   "private": false,
   "main": "./out/main/index.js",

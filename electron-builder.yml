@@ -1,6 +1,6 @@
-appId: studio.acme.secondbrain
+appId: io.github.emreaktas.secondbrain
 productName: Second Brain
-copyright: Copyright © 2026 Acme Studio
+copyright: Copyright © 2026 Emre Aktaş
 
 directories:
   buildResources: build

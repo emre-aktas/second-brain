@@ -7,6 +7,14 @@ import { createLogger } from './logger'
 
 const log = createLogger('notify')
 
+/**
+ * Must be byte-identical to `appId` in electron-builder.yml.
+ *
+ * Windows attributes a toast to the shortcut's identity rather than the process's, and
+ * a mismatch does not warn — the notification simply never appears.
+ */
+const APP_USER_MODEL_ID = 'io.github.emreaktas.secondbrain'
+
 /** Trim a reply down to something that fits in a notification without a scrollbar. */
 function preview(text: string, limit = 180): string {
   const flat = text
@@ -43,7 +51,7 @@ export class Notifier {
     // Windows shows the shortcut's identity on a toast, not the process's, and
     // without this it either falls back to "electron.app.Electron" or drops the
     // notification. electron-builder installs a shortcut with this id.
-    if (process.platform === 'win32') app.setAppUserModelId('studio.acme.secondbrain')
+    if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID)
 
     if (!Notification.isSupported()) {
       log.info('the desktop does not support notifications; none will be sent')

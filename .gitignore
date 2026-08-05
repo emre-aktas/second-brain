@@ -38,8 +38,12 @@ secrets.enc
 # Third-party skills vendored for local development, and the lockfile pinning them.
 # Not ours to republish.
 .agents/
-.claude/skills/
+.claude/
 skills-lock.json
+
+# Working notes for the coding agent, kept on disk and out of the repository. The
+# constraints worth publishing are in README.md instead.
+CLAUDE.md
 
 .DS_Store
 Thumbs.db
