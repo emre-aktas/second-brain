@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { NodeProse } from '@/components/NodeProse'
 import { ArrowLeft, ArrowRight, Crosshair, FolderOpen, Hourglass } from 'lucide-react'
 import type { BrainEdge, BrainNode, GraphNodeLite } from '@shared/types'
 import { api, errorMessage } from '@/lib/api'
@@ -212,7 +211,9 @@ export function NotePanel(): React.JSX.Element {
           ) : node.path ? (
             <>
               <div className="genui-prose selectable text-[13.5px] leading-relaxed text-foreground">
-                <Markdown remarkPlugins={[remarkGfm]}>{node.body || '*This note is empty.*'}</Markdown>
+                <NodeProse onOpenNode={openNode}>
+                  {node.body || '*This note is empty.*'}
+                </NodeProse>
               </div>
               <Button
                 variant="outline"

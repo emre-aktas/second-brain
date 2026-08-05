@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { NodeProse } from '@/components/NodeProse'
 import { Check, Copy } from 'lucide-react'
 import type {
   ChecklistState,
@@ -507,7 +506,7 @@ function OutputNode({
               </p>
             ) : (
               <div className="genui-prose selectable text-[13.5px] leading-relaxed text-foreground">
-                <Markdown remarkPlugins={[remarkGfm]}>{value}</Markdown>
+                <NodeProse>{value}</NodeProse>
               </div>
             )}
           </div>

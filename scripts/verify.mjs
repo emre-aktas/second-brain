@@ -35,6 +35,7 @@ const SUITE = [
   { file: 'src/main/util/slug.test.ts', mode: 'node' },
   { file: 'src/shared/hotkey.test.ts', mode: 'node' },
   { file: 'src/shared/schedule.test.ts', mode: 'node' },
+  { file: 'src/shared/wikilinks.test.ts', mode: 'node' },
   { file: 'src/main/vault/markdown.test.ts', mode: 'node' },
   { file: 'src/main/vault/unicode.test.ts', mode: 'node' },
   { file: 'src/main/db/storage.test.ts', mode: 'node' },

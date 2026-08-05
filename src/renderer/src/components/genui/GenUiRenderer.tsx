@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState } from 'react'
 import Markdown from 'react-markdown'
+import { NodeProse } from '@/components/NodeProse'
 import remarkGfm from 'remark-gfm'
 import {
   Area,
@@ -127,6 +128,12 @@ export function GenUi({
  * elements are unwrapped so a stray heading or list cannot break the layout of
  * whatever it is nested inside.
  */
+/** A text block, with wikilinks resolved through the context's node opener. */
+function ProseText({ text }: { text: string }): React.JSX.Element {
+  const { onOpenNode } = useContext(GenUiContext)
+  return <NodeProse onOpenNode={onOpenNode}>{text}</NodeProse>
+}
+
 function Inline({ text, className }: { text: string; className?: string }): React.JSX.Element {
   return (
     <span className={className}>
@@ -206,7 +213,7 @@ function Block({ block }: { block: GenUiBlock }): React.JSX.Element {
             block.muted ? 'text-muted-foreground' : 'text-foreground'
           )}
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{block.text}</Markdown>
+          <ProseText text={block.text} />
         </div>
       )
 

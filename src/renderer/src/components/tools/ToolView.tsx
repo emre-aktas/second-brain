@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { NodeProse } from '@/components/NodeProse'
 import {
   ArrowLeft,
   Check,
@@ -988,7 +987,7 @@ function WorkbenchSurface({
                 stale && 'opacity-45'
               )}
             >
-              <Markdown remarkPlugins={[remarkGfm]}>{state.output}</Markdown>
+              <NodeProse>{state.output}</NodeProse>
             </div>
           ) : (
             <p className="text-[13px] text-muted-foreground">
@@ -1110,7 +1109,7 @@ function ToolChat({
                 key={index}
                 className="genui-prose selectable text-[12.5px] leading-relaxed text-foreground"
               >
-                <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
+                <NodeProse>{message.text}</NodeProse>
               </div>
             )
           )}

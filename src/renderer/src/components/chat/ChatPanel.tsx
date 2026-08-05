@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { NodeProse } from '@/components/NodeProse'
 import { CalendarClock, ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toolIcon } from '@/components/panels/ToolsPanel'
@@ -17,6 +16,7 @@ import { PinnedToolStrip } from '@/components/panels/ToolsPanel'
 import { HistoryPopover } from './HistoryPopover'
 import { AttachButton, AttachmentStrip, readImageFiles } from './Attachments'
 import { QuestionCard } from './QuestionCard'
+import { TouchedNotes, touchedNotes } from './TouchedNotes'
 
 const CAPABILITY_LABEL: Record<AgentCapability, string> = {
   'read-only': 'Read only',
@@ -156,9 +156,12 @@ export function ChatPanel(): React.JSX.Element {
                 <p className="text-[13px] italic text-muted-foreground">{tail(streaming.thinking)}</p>
               )}
               {streaming.text && (
-                <div className="genui-prose selectable text-[13.5px] leading-relaxed text-foreground">
-                  <Markdown remarkPlugins={[remarkGfm]}>{streaming.text}</Markdown>
-                </div>
+                <NodeProse
+                  className="genui-prose selectable text-[13.5px] leading-relaxed text-foreground"
+                  onOpenNode={openNode}
+                >
+                  {streaming.text}
+                </NodeProse>
               )}
             </div>
           )}
@@ -395,6 +398,14 @@ function TurnView({
   const stepBlocks = allBlocks.filter(
     (block) => block.type === 'tool' || block.type === 'thinking'
   )
+
+  // Notes this turn wrote, taken from its tool results rather than from what the agent
+  // remembered to say — and minus anything it already linked in prose.
+  const said = allBlocks
+    .filter((block): block is Extract<ChatBlock, { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text)
+    .join(' ')
+  const touched = touchedNotes(allBlocks, said)
   const visibleBlocks = showActivity
     ? allBlocks
     : allBlocks.filter((block) => block.type === 'text' || block.type === 'genui')
@@ -453,6 +464,7 @@ function TurnView({
         >
           {!showActivity && stepBlocks.length > 0 && <StepSummary blocks={stepBlocks} />}
 
+
           {visibleBlocks.map((block, index) => {
             switch (block.type) {
               case 'text':
@@ -461,7 +473,7 @@ function TurnView({
                     key={index}
                     className="genui-prose selectable text-[13.5px] leading-relaxed text-foreground"
                   >
-                    <Markdown remarkPlugins={[remarkGfm]}>{block.text}</Markdown>
+                    <NodeProse onOpenNode={onOpenNode}>{block.text}</NodeProse>
                   </div>
                 )
 
@@ -496,6 +508,8 @@ function TurnView({
                 return null
             }
           })}
+
+          <TouchedNotes notes={touched} onOpenNode={onOpenNode} />
         </div>
       )}
     </div>
