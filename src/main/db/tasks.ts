@@ -142,7 +142,7 @@ export class TaskStore {
   }
 
   list(): ScheduledTask[] {
-    // Heartbeat first, then soonest-due, then newest. The Tasks tab reads top-down
+    // Heartbeat first, then soonest-due, then newest. The Scheduled tab reads top-down
     // and "what is the app about to do" is the question it exists to answer.
     const rows = this.db.all<TaskRow>(
       `SELECT * FROM scheduled_tasks

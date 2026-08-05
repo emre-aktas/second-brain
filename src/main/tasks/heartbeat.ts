@@ -21,7 +21,7 @@ const LAST_SIGNATURE_KEY = 'heartbeat/lastSignature'
 export interface HeartbeatBrief {
   /** False when the pre-check found nothing, so no turn is spent. */
   worthAsking: boolean
-  /** Why not, for the Tasks tab. Shown as the last result of a skipped run. */
+  /** Why not, for the Scheduled tab. Shown as the last result of a skipped run. */
   reason: string
   /** What to ask the agent, when there is something to ask about. */
   prompt: string

@@ -32,7 +32,7 @@ export class Scheduler {
    */
   private running: Promise<void> | null = null
 
-  /** Fires whenever a task's stored state changes, so the Tasks tab can refresh. */
+  /** Fires whenever a task's stored state changes, so the Scheduled tab can refresh. */
   onChanged: (() => void) | null = null
 
   constructor(
@@ -61,7 +61,7 @@ export class Scheduler {
   /**
    * Make sure the built-in check-in exists.
    *
-   * Seeded rather than hardcoded so it appears in the Tasks tab like everything else
+   * Seeded rather than hardcoded so it appears in the Scheduled tab like everything else
    * — the user can see it, disable it, or change when it runs. Its prompt is empty on
    * purpose: what it asks depends on what the pre-check found.
    */
@@ -145,7 +145,7 @@ export class Scheduler {
 
   /* -------------------------------------------------------------------- run */
 
-  /** Run one task now, whatever its schedule says. Used by the Tasks tab's button. */
+  /** Run one task now, whatever its schedule says. Used by the Scheduled tab's button. */
   async runNow(taskId: string): Promise<TaskRunResult> {
     const task = this.core.tasks.get(taskId)
     if (!task) throw new Error(`no task with id ${taskId}`)
@@ -241,7 +241,7 @@ export class Scheduler {
 
     const session = this.core.chat.createSession(task.name)
     // Archived so it stays out of the recent-conversations list until it has
-    // something to say; the Tasks tab is where these are found from.
+    // something to say; the Scheduled tab is where these are found from.
     this.core.chat.archiveSession(session.id, true)
     this.core.tasks.setSession(task.id, session.id)
     return session.id

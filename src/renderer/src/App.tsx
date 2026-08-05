@@ -369,7 +369,7 @@ const PANELS: { id: Panel; label: string; Icon: LucideIcon }[] = [
   { id: 'chat', label: 'Conversation', Icon: MessageSquare },
   { id: 'note', label: 'Note', Icon: FileText },
   { id: 'tools', label: 'Tools', Icon: Wand2 },
-  { id: 'tasks', label: 'Tasks', Icon: CalendarClock },
+  { id: 'tasks', label: 'Scheduled', Icon: CalendarClock },
   { id: 'activity', label: 'Activity', Icon: Activity },
   { id: 'settings', label: 'Settings', Icon: Settings }
 ]

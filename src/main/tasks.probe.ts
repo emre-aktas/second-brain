@@ -129,7 +129,7 @@ const beat = tasks.save({
   createdBy: 'system'
 })
 check('it is found by kind', tasks.heartbeat()?.id === beat.id)
-check('it sorts first, so the Tasks tab leads with it', tasks.list()[0]?.kind === 'heartbeat')
+check('it sorts first, so the Scheduled tab leads with it', tasks.list()[0]?.kind === 'heartbeat')
 
 // Seeding is guarded on heartbeat() being absent, so a second launch must not add
 // another. This asserts the guard's premise: there is exactly one to find.
@@ -192,7 +192,7 @@ check('and says what changed', first.reason.includes('changed'), first.reason)
 // same unchanged note would look new at every check-in for the rest of the day.
 const second = buildHeartbeat(fakeCore)
 check('asked again with nothing new, it declines', second.worthAsking === false, second.reason)
-check('and says why, for the Tasks tab', second.reason.length > 0)
+check('and says why, for the Scheduled tab', second.reason.length > 0)
 
 // A note past its expiry is worth raising even though nothing changed.
 nodes.upsert({

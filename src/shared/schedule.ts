@@ -5,7 +5,7 @@
  * creates most of these from a sentence the user typed ("every hour, scan Slack"),
  * and it is far easier to get a small tagged union right than a five-field
  * expression — a wrong cron string fails silently at the wrong time of day. And the
- * Tasks tab has to *show* the schedule; "every hour at :00" reads, `0 * * * *` does
+ * Scheduled tab has to *show* the schedule; "every hour at :00" reads, `0 * * * *` does
  * not.
  *
  * Everything here is local time, because "9am" means the user's 9am. Pure and
@@ -161,7 +161,7 @@ function rawNextRun(schedule: Schedule, after: number): number {
   }
 }
 
-/** The schedule in words, for the Tasks tab and for the agent to read back. */
+/** The schedule in words, for the Scheduled tab and for the agent to read back. */
 export function describeSchedule(schedule: Schedule): string {
   const at = (hour: number, minute: number): string =>
     `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`

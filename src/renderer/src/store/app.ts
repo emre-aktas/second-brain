@@ -678,7 +678,7 @@ function wireEvents(set: Setter, get: () => AppState): void {
         patch({ agentState: 'error', streaming: null })
         // Only for the chat being looked at. A toast about a scheduled run that
         // failed at 3am, surfaced over whatever the user is doing now, is noise —
-        // the Tasks tab records it as the task's last outcome instead.
+        // the Scheduled tab records it as the task's last outcome instead.
         if (isActive) toast.error('The agent hit a problem', { description: event.message })
         break
       }

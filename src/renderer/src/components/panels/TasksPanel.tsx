@@ -68,12 +68,12 @@ export function TasksPanel(): React.JSX.Element {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
-        <h2 className="text-[13px] font-semibold text-foreground">Tasks</h2>
-        <Tooltip content="Add a task">
+        <h2 className="text-[13px] font-semibold text-foreground">Scheduled</h2>
+        <Tooltip content="Schedule something">
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label="Add a task"
+            aria-label="Schedule something"
             onClick={() => setComposing((value) => !value)}
           >
             <Plus className="size-4" />

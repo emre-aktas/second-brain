@@ -823,7 +823,7 @@ export interface Settings {
    *
    * One switch over the whole thing, because being checked on by software is not
    * everyone's idea of help — off means no scheduled task runs at all, including
-   * the user's own, and the Tasks tab says so rather than quietly doing nothing.
+   * the user's own, and the Scheduled tab says so rather than quietly doing nothing.
    */
   proactive: {
     enabled: boolean

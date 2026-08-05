@@ -248,7 +248,7 @@ export interface ApiMap {
   'tasks:remove': (payload: { id: string }) => void
   /** Run it now regardless of its schedule. Resolves once the turn has settled. */
   'tasks:runNow': (payload: { id: string }) => TaskRunResult
-  /** The chat a task writes into, so the Tasks tab can open it. */
+  /** The chat a task writes into, so the Scheduled tab can open it. */
   'tasks:openSession': (payload: { id: string }) => { sessionId: string | null }
 
   'tools:list': (payload: void) => SavedTool[]

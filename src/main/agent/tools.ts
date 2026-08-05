@@ -1010,13 +1010,13 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
     {
       name: 'create_scheduled_task',
       description:
-        'Set up work the app will do on its own clock — "every hour, scan Slack and compile what is new", "every weekday at 9, summarise what changed yesterday". Use this the moment the user asks for something recurring; do not offer to remind them yourself, because you are not running between turns. Each task keeps its own chat, so a run never appears in the middle of this conversation. The user can see, pause and delete every one of these in the Tasks tab.',
+        'Set up work the app will do on its own clock — "every hour, scan Slack and compile what is new", "every weekday at 9, summarise what changed yesterday". Use this the moment the user asks for something recurring; do not offer to remind them yourself, because you are not running between turns. Each task keeps its own chat, so a run never appears in the middle of this conversation. The user can see, pause and delete every one of these in the Scheduled tab.',
       inputSchema: {
         type: 'object',
         properties: {
           name: {
             type: 'string',
-            description: 'Two to four words, how it will appear in the Tasks tab. E.g. "Slack digest".'
+            description: 'Two to four words, how it will appear in the Scheduled tab. E.g. "Slack digest".'
           },
           prompt: {
             type: 'string',
@@ -1069,7 +1069,7 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
         return ok(
           `"${fresh.name}" will run ${describeSchedule(fresh.schedule)}${
             fresh.nextRunAt ? `, next at ${new Date(fresh.nextRunAt).toLocaleString()}` : ''
-          }. It writes into its own chat. Tell them it is set up, in one line, and that the Tasks tab is where to pause it.`
+          }. It writes into its own chat. Tell them it is set up, in one line, and that the Scheduled tab is where to pause it.`
         )
       }
     },
@@ -1100,7 +1100,7 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
           [
             proactive.enabled
               ? 'Proactive work is on.'
-              : 'Proactive work is OFF, so none of these will run until the user turns it back on in the Tasks tab.',
+              : 'Proactive work is OFF, so none of these will run until the user turns it back on in the Scheduled tab.',
             ...lines
           ].join('\n')
         )
