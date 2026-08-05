@@ -66,15 +66,25 @@ window if you want one. The agent writes the interface as ordinary HTML and CSS 
 a sandboxed frame — so no two tools have to look alike — and each button runs a single
 agent job against the tool's inputs.
 
-**It works on its own clock.** The Tasks tab holds anything recurring: "every hour,
-scan Slack and compile what is new", "every weekday at nine, summarise yesterday".
-Ask for it in conversation and it appears there. Alongside them is an hourly check-in
-that decides for itself whether anything is worth raising — and answers "nothing to
-report" most of the time, which is the point.
+**It works on its own clock.** The Scheduled tab holds anything recurring: "every
+hour, scan Slack and compile what is new", "every weekday at nine, summarise
+yesterday". Ask for it in conversation and it appears there. Every run gets its own
+conversation, openable from the job's history — so a digest is a thread of digests
+rather than one that grows for ever.
 
-One switch turns all of that off, including your own tasks. An app that acts
-unprompted has to be legible, so every scheduled run is listed with what it will do,
-when it goes next, and how the last one went.
+Alongside them is a check-in that decides for itself whether anything is worth
+raising. Looking at your notes is free: a deterministic pre-check asks whether
+anything actually changed, and most hours the answer is no and nothing is spent.
+Looking *outside* your notes is not free, so that runs on a longer interval you
+control, and only ever names connectors your Claude account actually has.
+
+One switch turns all of it off, including your own jobs. An app that acts unprompted
+has to be legible, so every job is listed with what it will do, when it goes next,
+and every time it has run.
+
+An unattended run can read the outside world but cannot write to it. Permissions are
+pre-approved for a background turn — there is nobody to answer a prompt — so the
+tools that would send a message on your behalf are denied outright.
 
 **Notifications only when you are not looking.** A reply that lands while you are in
 another window, a scheduled run with something to say, a question the agent is blocked

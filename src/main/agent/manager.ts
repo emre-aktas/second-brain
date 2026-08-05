@@ -52,6 +52,8 @@ interface Runtime {
   activeToolRun: { toolId: string } | null
   /** Set while a tool's button is running, so its result lands in the right place. */
   activeAction: NonNullable<AgentTurnOptions['toolAction']> | null
+  /** Fixed at spawn, like model and capability, because the denylist is. */
+  unattended: boolean
 }
 
 /**
@@ -231,7 +233,8 @@ export class AgentManager {
       session.id,
       capability,
       options.model ?? this.core.settings.model,
-      options.effort ?? this.core.settings.effort
+      options.effort ?? this.core.settings.effort,
+      options.unattended === true
     )
 
     // Persist the user's turn before anything can fail downstream.
@@ -304,7 +307,9 @@ export class AgentManager {
       sessionId,
       capability,
       this.core.settings.model,
-      this.core.settings.effort
+      this.core.settings.effort,
+      // Changing tier is something the user did, so the replacement is attended.
+      false
     )
   }
 
@@ -338,14 +343,19 @@ export class AgentManager {
     sessionId: string,
     capability: AgentCapability,
     model: string,
-    effort: AgentEffort
+    effort: AgentEffort,
+    unattended: boolean
   ): Runtime {
     const existing = this.runtimes.get(sessionId)
     if (
       existing?.proc.alive &&
       existing.capability === capability &&
       existing.model === model &&
-      existing.effort === effort
+      existing.effort === effort &&
+      // Part of the process's identity, not of the turn: the denylist is passed at spawn,
+      // so reusing an attended process for an unattended run would hand a background turn
+      // the tools it is not allowed to have.
+      existing.unattended === unattended
     ) {
       return existing
     }
@@ -377,6 +387,8 @@ export class AgentManager {
         // Never let one turn exceed either the per-turn cap or what is left of
         // today's allowance, whichever is smaller.
         maxBudgetUsd: this.perTurnCeiling(),
+        // A scheduled run is unattended, which widens what it may not do.
+        unattended,
         effort
       },
       // `proc` is referenced before the constructor returns, but only from the
@@ -390,6 +402,7 @@ export class AgentManager {
       capability,
       model,
       effort,
+      unattended,
       lastAssistantMessageId: null,
       messageIds: new Map(),
       toolLocations: new Map(),

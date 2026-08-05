@@ -16,6 +16,7 @@ import { appearance, useAppearanceFrom } from './appearance'
 import { openSessionIds, registerIpc, unregisterIpc } from './ipc'
 import { createLogger, initLogger, onLogEntry } from './logger'
 import { Scheduler } from './tasks/scheduler'
+import { AccountServers } from './agent/accountServers'
 import { configureToastIdentity, Notifier } from './notify'
 import { trafficLightPosition } from '@shared/window-chrome'
 
@@ -31,6 +32,7 @@ let toolWindows: ToolWindowManager | null = null
 let shortcuts: ShortcutManager | null = null
 let previewer: ToolPreviewer | null = null
 let scheduler: Scheduler | null = null
+let accountServers: AccountServers | null = null
 let notifier: Notifier | null = null
 let broadcaster: Broadcaster | null = null
 let shuttingDown = false
@@ -219,7 +221,11 @@ async function bootstrap(): Promise<void> {
     core.broadcast('tools:activate', { toolId: tool.id, focusInput: true })
   })
 
-  scheduler = new Scheduler(core, agent)
+  // One reader for the account's connectors, shared: it caches, and the check-in and the
+  // integrations panel should not each pay for their own health check of every server.
+  accountServers = new AccountServers()
+
+  scheduler = new Scheduler(core, agent, accountServers)
   scheduler.onChanged = () => core?.broadcast('tasks:changed')
 
   // Which chats a window is showing. Retiring one the renderer has open would leave it

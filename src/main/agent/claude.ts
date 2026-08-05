@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentCapability } from '@shared/types'
-import { deniedToolsFor } from './prompt'
+import { deniedToolsFor, deniedToolsForUnattended } from './prompt'
 import { createLogger } from '../logger'
 
 const log = createLogger('claude')
@@ -244,6 +244,13 @@ export interface ClaudeProcessOptions {
   maxBudgetUsd?: number | null
   /** Thinking budget: low | medium | high | xhigh | max. */
   effort?: string | null
+  /**
+   * True for a scheduled run, which nobody is watching.
+   *
+   * Widens the denylist: bypassPermissions pre-approves every tool call, so without this a
+   * background check-in reading Slack could also post to it.
+   */
+  unattended?: boolean
   extraEnv?: Record<string, string>
   /** Appended verbatim; used for diagnostics such as --debug mcp. */
   extraArgs?: string[]
@@ -307,7 +314,9 @@ export class ClaudeProcess {
 
     if (this.options.effort) args.push('--effort', this.options.effort)
 
-    const denied = deniedToolsFor(capability)
+    const denied = this.options.unattended
+      ? deniedToolsForUnattended(capability)
+      : deniedToolsFor(capability)
     if (denied.length > 0) args.push('--disallowedTools', denied.join(','))
 
     // Enforced by the CLI itself, so a runaway turn stops even if the app is

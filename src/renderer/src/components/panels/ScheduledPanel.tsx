@@ -91,6 +91,7 @@ export function ScheduledPanel(): React.JSX.Element {
             enabled={enabled}
             heartbeat={proactive?.heartbeat ?? false}
             quiet={proactive?.quietHours}
+            sweep={proactive?.sweep}
             onChange={updateSettings}
           />
 
@@ -134,11 +135,13 @@ function MasterSwitch({
   enabled,
   heartbeat,
   quiet,
+  sweep,
   onChange
 }: {
   enabled: boolean
   heartbeat: boolean
   quiet: { enabled: boolean; startHour: number; endHour: number } | undefined
+  sweep: { enabled: boolean; slack: boolean; grain: boolean; everyHours: number } | undefined
   onChange: (patch: Parameters<ReturnType<typeof useApp.getState>['updateSettings']>[0]) => Promise<void>
 }): React.JSX.Element {
   return (
@@ -176,6 +179,69 @@ function MasterSwitch({
             />
             Check in unprompted
           </label>
+
+          {heartbeat && sweep && (
+            <div className="flex flex-col gap-1.5 rounded-md border border-border/60 bg-secondary/20 px-2 py-1.5">
+              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={sweep.enabled}
+                  onChange={(event) =>
+                    void onChange({ proactive: { sweep: { enabled: event.target.checked } } })
+                  }
+                  className="size-3.5 accent-primary"
+                />
+                Also look outside the vault, every
+                <NativeSelect
+                  aria-label="How often to look outside the vault"
+                  value={String(sweep.everyHours)}
+                  onChange={(next) =>
+                    void onChange({ proactive: { sweep: { everyHours: Number(next) } } })
+                  }
+                  options={[
+                    { value: '2', label: '2 hours' },
+                    { value: '4', label: '4 hours' },
+                    { value: '8', label: '8 hours' },
+                    { value: '24', label: 'day' }
+                  ]}
+                  className="h-6 py-0 text-[11px]"
+                />
+              </label>
+
+              {sweep.enabled && (
+                <div className="flex items-center gap-3 pl-5">
+                  {(['slack', 'grain'] as const).map((source) => (
+                    <label
+                      key={source}
+                      className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-muted-foreground"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={sweep[source]}
+                        onChange={(event) =>
+                          void onChange({
+                            proactive: { sweep: { [source]: event.target.checked } }
+                          })
+                        }
+                        className="size-3 accent-primary"
+                      />
+                      {source === 'slack' ? 'Slack' : 'Grain'}
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {/*
+                Said plainly, because this is the one part of proactivity that is not free.
+                The vault check costs nothing on a quiet hour; a sweep is a turn every time.
+              */}
+              <p className="pl-5 text-[10.5px] leading-relaxed text-muted-foreground text-pretty">
+                {sweep.enabled
+                  ? 'Unlike the vault check, this spends a turn every time it runs — the interval is the budget. Sources you have not connected are never mentioned.'
+                  : 'The check-in only looks at your notes.'}
+              </p>
+            </div>
+          )}
 
           <label className="flex cursor-pointer flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
             <input

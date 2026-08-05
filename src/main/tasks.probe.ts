@@ -175,15 +175,38 @@ const suggestions = new SuggestionStore(db)
 
 // buildHeartbeat only reaches for these four, so a stand-in is honest here and keeps
 // the probe free of a whole BrainCore.
-const fakeCore = { nodes, kv, suggestions } as unknown as Parameters<typeof buildHeartbeat>[0]
+const fakeCore = {
+  nodes,
+  kv,
+  suggestions,
+  // dueSweepSources reads settings; buildHeartbeat itself does not, but the stand-in has
+  // to satisfy both since they share a core.
+  settings: {
+    proactive: { sweep: { enabled: false, slack: false, grain: false, everyHours: 4 } }
+  }
+} as unknown as Parameters<typeof buildHeartbeat>[0]
+
+/**
+ * Ask, then commit — which is the order the scheduler uses and the order that matters.
+ *
+ * The watermarks deliberately advance *after* a turn rather than before it: a check-in
+ * that writes a note makes that note "changed" for the next check-in, which would then
+ * have something to report, which would write another note. A probe that skipped the
+ * commit would be testing a version of the gate that does not exist.
+ */
+function checkIn(): ReturnType<typeof buildHeartbeat> {
+  const brief = buildHeartbeat(fakeCore)
+  brief.commit()
+  return brief
+}
 
 // An empty vault has nothing to say.
-check('an empty vault is not worth asking about', buildHeartbeat(fakeCore).worthAsking === false)
+check('an empty vault is not worth asking about', checkIn().worthAsking === false)
 
 nodes.upsert({ kind: 'note', title: 'Bir not', path: 'bir-not.md', body: 'gövde' })
 
 // lastSeen was advanced by the call above, so this note counts as new.
-const first = buildHeartbeat(fakeCore)
+const first = checkIn()
 check('a new note is worth asking about', first.worthAsking === true, first.reason)
 check('and the brief names it', first.prompt.includes('Bir not'))
 check('and says what changed', first.reason.includes('changed'), first.reason)
@@ -191,7 +214,7 @@ check('and says what changed', first.reason.includes('changed'), first.reason)
 // The key assertion. Called again with nothing new, it must not spend a turn — and
 // this only holds because lastSeen is advanced even on a skip. Left un-advanced, the
 // same unchanged note would look new at every check-in for the rest of the day.
-const second = buildHeartbeat(fakeCore)
+const second = checkIn()
 check('asked again with nothing new, it declines', second.worthAsking === false, second.reason)
 check('and says why, for the Scheduled tab', second.reason.length > 0)
 
@@ -203,13 +226,13 @@ nodes.upsert({
   body: 'x',
   expiresAt: Date.now() - 60_000
 })
-const third = buildHeartbeat(fakeCore)
+const third = checkIn()
 check('an expired note is worth raising', third.worthAsking === true, third.reason)
 
 // The one that matters most for spend. An expired note is a standing condition, not
 // an event: without comparing against what was last found, this would fire every hour
 // for ever over something the user has already seen and chosen to leave.
-const quiet = buildHeartbeat(fakeCore)
+const quiet = checkIn()
 check('the same finding is not raised twice', quiet.worthAsking === false, quiet.reason)
 check('and it says so, rather than claiming nothing changed', quiet.reason.includes('new'), quiet.reason)
 
@@ -224,8 +247,8 @@ const sabit = nodes.upsert({
 // permanent, so its passed expiry must never be raised.
 nodes.setPinned(sabit.id, true)
 // The write itself counts as a change, so the claim is checked on the settled pass.
-buildHeartbeat(fakeCore)
-const pinnedPass = buildHeartbeat(fakeCore)
+checkIn()
+const pinnedPass = checkIn()
 check('a pinned note past its expiry is left alone', pinnedPass.worthAsking === false, pinnedPass.reason)
 
 // A waiting suggestion is a standing reason to speak up.
@@ -235,7 +258,7 @@ suggestions.add({
   rationale: 'iki not aynı konudan bahsediyor',
   payload: {}
 })
-const withSuggestion = buildHeartbeat(fakeCore)
+const withSuggestion = checkIn()
 check('a pending suggestion is worth raising', withSuggestion.worthAsking === true, withSuggestion.reason)
 check('and it is counted in the reason', withSuggestion.reason.includes('suggestion'), withSuggestion.reason)
 
@@ -315,6 +338,56 @@ check('two means a person joined in', chat.userMessageCount(runB.id) === 2)
 
 runs.deleteForTask(slack.id)
 check('deleting a task takes its history', runs.forTask(slack.id).length === 0)
+
+/* ------------------------------------------------------- the self-sustaining loop */
+
+// The failure this ordering exists to prevent, asserted directly. A check-in that writes
+// a note would otherwise see its own note as "changed" at the next check-in, have
+// something to report, write another note, and never stop — an hourly turn for ever, paid
+// for out of the user's subscription.
+
+console.log('\nthe check-in does not feed itself')
+
+// Something for the run to be about, so the sequence below starts from a real turn
+// rather than from an already-settled vault.
+nodes.upsert({ kind: 'note', title: 'Tetikleyici not', path: 'tetik.md', body: 'yeni' })
+
+// A note written *during* a run: created after the pre-check looked, before the commit.
+const beforeRun = buildHeartbeat(fakeCore)
+check('the run has something to say', beforeRun.worthAsking === true, beforeRun.reason)
+nodes.upsert({ kind: 'log', title: 'Yoklama raporu', path: 'yoklama.md', body: 'rapor' })
+beforeRun.commit()
+
+// The watermark went to the moment the pre-check looked, so the note the run itself wrote
+// is newer and *is* reported next time — which is correct, a note is a note. What must not
+// happen is the loop: the pass after that has to settle.
+const afterRun = checkIn()
+const settled = checkIn()
+check('the pass after a run may still speak', typeof afterRun.worthAsking === 'boolean')
+check('but it settles rather than looping', settled.worthAsking === false, settled.reason)
+
+/* ----------------------------------------------------------- snapshots do not nag */
+
+console.log('\nnotes born temporary')
+
+// A digest given a week to live is *meant* to expire. Raising it five days later would be
+// the check-in nagging about its own housekeeping, for every digest, for ever.
+const digest = nodes.upsert({
+  kind: 'log',
+  title: 'Günlük özet',
+  path: 'ozet.md',
+  body: 'x',
+  summary: 'a digest',
+  expiresAt: Date.now() + 6 * 24 * 60 * 60_000
+})
+nodes.setPinned(digest.id, false)
+checkIn()
+const withDigest = checkIn()
+check(
+  'a note that was always temporary is not a reason to speak',
+  withDigest.worthAsking === false,
+  withDigest.reason
+)
 
 db.close()
 rmSync(work, { recursive: true, force: true })

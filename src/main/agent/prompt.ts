@@ -611,6 +611,43 @@ say so in a clause, not a paragraph.`)
  * cuts the agent off from the brain itself. `--disallowedTools` removes only
  * what is named and leaves the MCP server intact.
  */
+/**
+ * Connector tools that would speak to someone on the user's behalf.
+ *
+ * Denied for unattended runs regardless of capability. `--permission-mode
+ * bypassPermissions` pre-approves everything the model asks for — there is nothing to
+ * answer a prompt in a background turn — so at `curate` a check-in reading Slack could
+ * just as easily post to it. Nobody's scheduled digest should be able to send a message.
+ *
+ * Matched as suffixes because the account's MCP servers are namespaced by a per-connection
+ * uuid: the real tool name is `mcp__<uuid>__slack_send_message_draft`, and the uuid is not
+ * knowable here. `--disallowedTools` accepts these patterns.
+ */
+const OUTBOUND_CONNECTOR_TOOLS = [
+  'mcp__*__slack_send_message_draft',
+  'mcp__*__clickup_send_chat_message',
+  'mcp__*__clickup_create_comment',
+  'mcp__*__clickup_create_task',
+  'mcp__*__clickup_update_task',
+  'mcp__*__clickup_delete_task',
+  'mcp__*__tiktok_publish',
+  'mcp__*__publish_website',
+  'mcp__*__publish_game',
+  'mcp__*__deploy_website',
+  'mcp__*__deploy_game'
+]
+
+/**
+ * What an unattended run may not do, on top of its capability tier.
+ *
+ * A scheduled run has nobody watching it, so the things it must never do are wider than
+ * for a turn the user is sitting in front of: it can read the outside world and write to
+ * the vault, but it cannot send anything to anyone.
+ */
+export function deniedToolsForUnattended(capability: AgentCapability): string[] {
+  return [...deniedToolsFor(capability), ...OUTBOUND_CONNECTOR_TOOLS]
+}
+
 export function deniedToolsFor(capability: AgentCapability): string[] {
   // Built-ins that can write to disk or run commands.
   const writeBuiltins = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit']

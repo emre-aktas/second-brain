@@ -254,6 +254,14 @@ export interface AgentTurnOptions {
   toolRun?: ChatMessageMeta['toolRun']
   /** Present when the scheduler started this turn. */
   taskRun?: ChatMessageMeta['taskRun']
+  /**
+   * Nobody is watching this turn.
+   *
+   * Denies the connector tools that would speak to someone on the user's behalf. The CLI
+   * runs with permissions pre-approved because there is no one to answer a prompt, so a
+   * background run that can read Slack could otherwise post to it.
+   */
+  unattended?: boolean
   /** Images to send with this turn. */
   images?: ChatImage[]
   /** Present when a button inside a tool started this turn. */
@@ -851,6 +859,21 @@ export interface Settings {
       enabled: boolean
       startHour: number
       endHour: number
+    }
+    /**
+     * Looking outside the vault — Slack, Grain — during the check-in.
+     *
+     * On a much longer interval than the vault check, and that is the whole design. A
+     * changed note is free to notice, so the hourly gate can answer "nothing" and cost
+     * nothing; asking the model to read Slack answers "maybe" every time, so how often it
+     * happens *is* what it costs. Only connectors the account actually has are ever named.
+     */
+    sweep: {
+      enabled: boolean
+      slack: boolean
+      grain: boolean
+      /** Hours between sweeps. Four means four turns a day at most from this. */
+      everyHours: number
     }
   }
   notifications: {

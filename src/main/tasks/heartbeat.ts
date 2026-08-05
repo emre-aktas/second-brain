@@ -18,6 +18,9 @@ const LAST_SEEN_KEY = 'heartbeat/lastSeenAt'
  */
 const LAST_SIGNATURE_KEY = 'heartbeat/lastSignature'
 
+/** The key holding when the connector sweep last actually ran. */
+const LAST_SWEPT_KEY = 'heartbeat/lastSweptAt'
+
 export interface HeartbeatBrief {
   /** False when the pre-check found nothing, so no turn is spent. */
   worthAsking: boolean
@@ -25,6 +28,23 @@ export interface HeartbeatBrief {
   reason: string
   /** What to ask the agent, when there is something to ask about. */
   prompt: string
+  /**
+   * Connectors this brief asked the agent to look at, if any.
+   *
+   * Empty when the sweep was not due or nothing is connected — in which case the prompt
+   * never mentions an external source at all, so a missing connector cannot turn into a
+   * turn spent explaining that it is missing.
+   */
+  swept: string[]
+  /**
+   * Applied by the scheduler once the turn has settled.
+   *
+   * The watermarks must not advance before the turn, and this is not a style preference:
+   * a check-in that writes a note makes that note "changed" for the *next* check-in, which
+   * would then have something to report, which would write another note. Advancing after
+   * the turn — past the moment the run started — closes the loop.
+   */
+  commit: () => void
 }
 
 /**
@@ -39,13 +59,9 @@ export interface HeartbeatBrief {
  * actually happened? Only when the answer is yes does a turn get spent, and the brief
  * it produces already contains what changed, so the model does not have to go looking.
  */
-export function buildHeartbeat(core: BrainCore): HeartbeatBrief {
+export function buildHeartbeat(core: BrainCore, sweepSources: string[] = []): HeartbeatBrief {
   const now = Date.now()
   const lastSeen = core.kv.get<number>(LAST_SEEN_KEY) ?? 0
-
-  // Advanced whether or not a turn is spent. Left un-advanced on a skip, the same
-  // unchanged notes would be "new" at every check-in for the rest of the day.
-  core.kv.set(LAST_SEEN_KEY, now)
 
   const recent = core.nodes.listRecent(60)
 
@@ -58,7 +74,11 @@ export function buildHeartbeat(core: BrainCore): HeartbeatBrief {
       node.expiresAt !== null &&
       node.expiresAt > now &&
       node.expiresAt - now < 2 * DAY &&
-      !node.pinned
+      !node.pinned &&
+      // Not notes that were born temporary. A daily digest given a week to live is
+      // *meant* to expire, so raising it five days later is the check-in nagging about
+      // its own housekeeping — and it would do so for every digest, for ever.
+      !(node.expiresAt - node.createdAt <= 8 * DAY)
   )
 
   const overdue = recent.filter(
@@ -85,15 +105,6 @@ export function buildHeartbeat(core: BrainCore): HeartbeatBrief {
   if (stranded.length > 0) signals.push(`${stranded.length} unconnected`)
   if (pendingSuggestions > 0) signals.push(`${pendingSuggestions} suggestion(s) waiting`)
 
-  if (signals.length === 0) {
-    core.kv.set(LAST_SIGNATURE_KEY, '')
-    return {
-      worthAsking: false,
-      reason: 'Nothing changed since the last check-in.',
-      prompt: ''
-    }
-  }
-
   /**
    * The standing conditions, as a comparable string.
    *
@@ -110,17 +121,44 @@ export function buildHeartbeat(core: BrainCore): HeartbeatBrief {
     suggestions: pendingSuggestions
   })
 
-  const previous = core.kv.get<string>(LAST_SIGNATURE_KEY) ?? ''
-  core.kv.set(LAST_SIGNATURE_KEY, standing)
+  /**
+   * Advance the watermarks. Called by the scheduler once the turn has settled.
+   *
+   * Declared here rather than earlier because it closes over `standing`, and reading that
+   * before its initialiser is a temporal-dead-zone crash that no typecheck would catch.
+   */
+  const commit = (): void => {
+    // To `now`, the moment the pre-check looked — not to the time the turn finished.
+    // Anything the user edited *during* the turn stays newer than the watermark and is
+    // reported next time, rather than being silently stepped over.
+    core.kv.set(LAST_SEEN_KEY, now)
+    core.kv.set(LAST_SIGNATURE_KEY, standing)
+    if (sweepSources.length > 0) core.kv.set(LAST_SWEPT_KEY, now)
+  }
 
-  // Ask when something actually happened, or when the standing picture has moved.
-  // Without the second half, a note past its expiry would be raised every hour for
-  // ever; without the first, an edit would be missed whenever nothing else had moved.
-  if (changed.length === 0 && standing === previous) {
+  if (signals.length === 0 && sweepSources.length === 0) {
+    return {
+      worthAsking: false,
+      reason: 'Nothing changed since the last check-in.',
+      prompt: '',
+      swept: [],
+      commit
+    }
+  }
+
+  const previous = core.kv.get<string>(LAST_SIGNATURE_KEY) ?? ''
+
+  // Ask when something actually happened, when the standing picture has moved, or when a
+  // connector sweep is due. Without the second, a note past its expiry would be raised
+  // every hour for ever; without the first, an edit would be missed whenever nothing else
+  // had moved; without the third, a quiet vault would mean Slack is never looked at.
+  if (changed.length === 0 && standing === previous && sweepSources.length === 0) {
     return {
       worthAsking: false,
       reason: 'Nothing new since the last check-in.',
-      prompt: ''
+      prompt: '',
+      swept: [],
+      commit
     }
   }
 
@@ -140,28 +178,84 @@ export function buildHeartbeat(core: BrainCore): HeartbeatBrief {
             )
         ]
 
+  const sweep =
+    sweepSources.length === 0
+      ? []
+      : [
+          '',
+          `Also look at ${sweepSources.join(' and ')}. These are connected right now, so`,
+          'the tools are there. Read what has arrived since you last checked and decide',
+          'whether any of it is something the user needs from you — a decision waiting on',
+          'them, a thread that has gone quiet on their side, something worth writing down',
+          'as a note so it is not lost in a channel.',
+          '',
+          'Do not summarise for the sake of summarising. Nobody asked for a digest of',
+          'their own messages, and reading a channel is not itself news.'
+        ]
+
   const prompt = [
-    'This is your hourly check-in. Nobody asked for it, so the bar for saying anything',
-    'is high: the user should be glad you spoke, not merely informed.',
+    'This is your check-in. Nobody asked for it, so the bar for saying anything is high:',
+    'the user should be glad you spoke, not merely informed.',
     '',
-    `Since you last looked: ${signals.join(', ')}.`,
+    signals.length > 0
+      ? `Since you last looked: ${signals.join(', ')}.`
+      : 'Nothing has changed in the vault since you last looked.',
     ...list('Changed', changed.slice(0, 8)),
     ...list('Past its expiry', overdue),
     ...list('Expiring within two days', expiringSoon),
     ...list('Written but unconnected', stranded),
+    ...sweep,
     '',
-    'Decide for yourself whether any of it is worth raising. If it is, say the useful',
-    'thing in a couple of sentences — a connection nobody has drawn, a note that is',
-    'about to disappear and probably should not, a pattern across what changed. Use a',
-    'generated interface if it reads better than prose.',
+    'Decide for yourself whether any of it is worth raising. If it is, present it with a',
+    'generated interface — render_ui — rather than as prose: a short report reads far',
+    'better than a paragraph, and this is a report. Mention notes as [[Wikilinks]] so the',
+    'user can open them from what you write.',
     '',
     'If you have a real question for the user, ask it with ask_user — this is your own',
     'chat, so asking here interrupts nothing.',
     '',
-    'If none of it is worth their attention, reply with exactly "Nothing to report."',
-    'and stop. That is a good outcome, not a failure, and it is the right answer most',
-    'of the time.'
+    'If none of it is worth their attention, reply with exactly these three words and',
+    'nothing else: Nothing to report. No trailing explanation, no "Nothing to report —',
+    'Slack was quiet": the app matches that phrase exactly to stay silent, and anything',
+    'appended to it becomes a desktop notification. Replying it is a good outcome, not a',
+    'failure, and it is the right answer most of the time.'
   ].join('\n')
 
-  return { worthAsking: true, reason: signals.join(', '), prompt }
+  const reason =
+    signals.length > 0
+      ? [...signals, ...(sweepSources.length > 0 ? [`swept ${sweepSources.join(', ')}`] : [])].join(', ')
+      : `swept ${sweepSources.join(', ')}`
+
+  return { worthAsking: true, reason, prompt, swept: sweepSources, commit }
 }
+
+/**
+ * Which external sources are due a look.
+ *
+ * Separate from the vault check and much less often, because they are the half that costs
+ * something: a changed note is free to notice, whereas asking the model to read Slack is a
+ * turn every time. The vault gate can stay hourly precisely because most hours it answers
+ * "nothing"; a connector sweep answers "maybe" every time, so its frequency *is* its cost.
+ *
+ * Returns display names, and only for connectors the account actually has — naming a
+ * source the user has not connected buys a turn spent explaining that it is missing.
+ */
+export function dueSweepSources(
+  core: BrainCore,
+  connected: (needle: string) => boolean,
+  everyHours: number
+): string[] {
+  const settings = core.settings.proactive
+  if (!settings.sweep.enabled) return []
+
+  const last = core.kv.get<number>(LAST_SWEPT_KEY) ?? 0
+  if (Date.now() - last < Math.max(1, everyHours) * HOUR) return []
+
+  const wanted: string[] = []
+  if (settings.sweep.slack && connected('slack')) wanted.push('Slack')
+  if (settings.sweep.grain && connected('grain')) wanted.push('Grain')
+  return wanted
+}
+
+/** Exported for the probe: the watermark the sweep is scheduled from. */
+export const HEARTBEAT_SWEPT_KEY = LAST_SWEPT_KEY

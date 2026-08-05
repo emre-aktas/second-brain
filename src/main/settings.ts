@@ -57,6 +57,15 @@ export function defaultSettings(workspacePath: string): Settings {
         enabled: true,
         startHour: 23,
         endHour: 7
+      },
+      sweep: {
+        // On, but at a quarter of the check-in's rate. This is the one part of
+        // proactivity that costs a turn every time it runs — the vault gate is free when
+        // nothing changed, a sweep never is — so its interval is its budget.
+        enabled: true,
+        slack: true,
+        grain: true,
+        everyHours: 4
       }
     },
     notifications: {
