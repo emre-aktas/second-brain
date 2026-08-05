@@ -44,6 +44,9 @@ export function defaultSettings(workspacePath: string): Settings {
       labelThreshold: 0.75,
       rotate: true
     },
+    layout: {
+      panelWidth: 430
+    },
     appearance: {
       theme: 'dark',
       accent: 'violet',
@@ -81,13 +84,27 @@ export function defaultSettings(workspacePath: string): Settings {
   }
 }
 
-/** Deep-merge stored settings over defaults so new keys appear without migration. */
+/**
+ * Deep-merge stored settings over defaults so new keys appear without migration.
+ *
+ * The defaults define the *shape*; the stored file only supplies values. That asymmetry is
+ * the load-bearing part: this file is plain JSON in the user's own workspace, so it can be
+ * hand-edited, half-written by a crash, or left behind by a build that structured something
+ * differently. A patch that disagrees about the shape is discarded rather than trusted,
+ * because a `Settings` whose `layout` is the string "wide" satisfies no reader in the app —
+ * the type says it is an object and every call site believes it.
+ */
 function merge<T>(base: T, patch: unknown): T {
+  const baseIsGroup = base !== null && typeof base === 'object' && !Array.isArray(base)
+
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+    // A scalar or an array cannot stand in for a group of settings. Keep the default.
+    if (baseIsGroup) return base
     return (patch === undefined ? base : (patch as T)) ?? base
   }
-  if (base === null || typeof base !== 'object' || Array.isArray(base)) {
-    return patch as T
+  if (!baseIsGroup) {
+    // And a group cannot stand in for a scalar either — same argument, other direction.
+    return base === undefined ? (patch as T) : base
   }
 
   const out = { ...(base as Record<string, unknown>) }

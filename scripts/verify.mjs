@@ -39,6 +39,7 @@ const SUITE = [
   { file: 'src/shared/graph-3d.test.ts', mode: 'node' },
   { file: 'src/main/vault/markdown.test.ts', mode: 'node' },
   { file: 'src/main/vault/unicode.test.ts', mode: 'node' },
+  { file: 'src/main/settings.test.ts', mode: 'node' },
   { file: 'src/main/db/storage.test.ts', mode: 'node' },
   { file: 'src/main/canvas.probe.ts', mode: 'node' },
   { file: 'src/main/expiry.probe.ts', mode: 'node' },

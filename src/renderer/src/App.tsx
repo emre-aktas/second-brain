@@ -35,6 +35,18 @@ const MIN_PANEL = 340
 // table, and clamping the panel to a "reading width" fights that.
 const MAX_PANEL = 1600
 
+/**
+ * A panel width this window can actually accommodate.
+ *
+ * Leaves a sliver of graph visible rather than letting the panel eat the window. Shared by
+ * the drag and by the restore, because they have to agree: a bound applied only while
+ * dragging is a bound a saved value walks straight past.
+ */
+function clampPanel(width: number): number {
+  const ceiling = Math.max(MIN_PANEL, Math.min(MAX_PANEL, window.innerWidth - 160))
+  return Math.min(ceiling, Math.max(MIN_PANEL, width))
+}
+
 export function App(): React.JSX.Element {
   const ready = useApp((s) => s.ready)
   const init = useApp((s) => s.init)
@@ -109,7 +121,18 @@ function Shell(): React.JSX.Element {
     }
   }, [])
 
+  const updateSettings = useApp((s) => s.updateSettings)
+  const savedPanelWidth = useApp((s) => s.settings?.layout?.panelWidth)
+
   const [panelWidth, setPanelWidth] = useState(430)
+  /**
+   * Whether the saved width has been applied.
+   *
+   * Once, and only once. Committing a resize broadcasts the new settings back to every
+   * window, including this one — so an effect that simply followed `savedPanelWidth` would
+   * receive its own write and fight the next drag with a value one commit stale.
+   */
+  const hydratedWidthRef = useRef(false)
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
   const reduceMotion = useReduceMotion()
@@ -167,6 +190,16 @@ function Shell(): React.JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // The width the user last dragged it to, restored on launch.
+  useEffect(() => {
+    if (hydratedWidthRef.current || savedPanelWidth === undefined) return
+    hydratedWidthRef.current = true
+    // Clamped against *this* window. A width saved on a wide monitor, restored on a laptop,
+    // would otherwise open with the panel covering the graph entirely — which is the
+    // failure that persisting a layout introduces if nothing bounds it on the way back in.
+    setPanelWidth(clampPanel(savedPanelWidth))
+  }, [savedPanelWidth])
+
   const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     resizeRef.current = { startX: event.clientX, startWidth: panelWidth }
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -175,15 +208,19 @@ function Shell(): React.JSX.Element {
   const onResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     const state = resizeRef.current
     if (!state) return
-    const next = state.startWidth - (event.clientX - state.startX)
-    // Leave a sliver of graph visible rather than letting the panel eat the window.
-    const ceiling = Math.min(MAX_PANEL, window.innerWidth - 160)
-    setPanelWidth(Math.min(ceiling, Math.max(MIN_PANEL, next)))
+    setPanelWidth(clampPanel(state.startWidth - (event.clientX - state.startX)))
   }
 
   const endResize = (event: React.PointerEvent<HTMLDivElement>): void => {
     resizeRef.current = null
     event.currentTarget.releasePointerCapture(event.pointerId)
+
+    // On release, not on every pointer move. Each commit is an IPC round trip, a
+    // synchronous write of the whole settings file and a broadcast to every window; one
+    // drag across the screen would be dozens of them.
+    if (panelWidth !== savedPanelWidth) {
+      void updateSettings({ layout: { panelWidth } })
+    }
   }
 
   return (

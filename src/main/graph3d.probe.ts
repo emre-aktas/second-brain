@@ -130,6 +130,7 @@ const SETTINGS = {
     labelThreshold: 0.75,
     rotate: true
   },
+  layout: { panelWidth: 430 },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 

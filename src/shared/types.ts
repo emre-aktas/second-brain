@@ -856,6 +856,17 @@ export interface Settings {
     reduceMotion: boolean
   }
   /**
+   * Where the user has put things.
+   *
+   * Separate from `appearance` because it is not a preference the user chose from a list —
+   * it is the shape they dragged the window into, and it should come back the way they left
+   * it without being something they have to think of as a setting.
+   */
+  layout: {
+    /** Width of the right-hand panel, in CSS pixels. */
+    panelWidth: number
+  }
+  /**
    * Work the app starts on its own.
    *
    * One switch over the whole thing, because being checked on by software is not

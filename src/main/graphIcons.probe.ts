@@ -632,6 +632,7 @@ const SETTINGS = {
   curator: { enabled: false, idleMs: 90000, intervalMs: 600000, autoLinkSimilar: false, useAgent: false, similarityThreshold: 0.22 },
   chat: { showToolActivity: false },
   graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75, rotate: false },
+  layout: { panelWidth: 430 },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 
