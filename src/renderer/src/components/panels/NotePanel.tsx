@@ -16,6 +16,13 @@ import { modifierLabel } from '@/lib/chrome'
 export function NotePanel(): React.JSX.Element {
   const selectedId = useApp((s) => s.selectedNodeId)
   const openNode = useApp((s) => s.openNode)
+  const goBackNode = useApp((s) => s.goBackNode)
+  const trail = useApp((s) => s.nodeTrail)
+  const cameFrom = useApp((s) => {
+    const previous = s.nodeTrail.at(-1)
+    if (!previous) return null
+    return s.graph.nodes.find((candidate) => candidate.id === previous)?.title ?? null
+  })
   const focusNodes = useApp((s) => s.focusNodes)
   const refreshGraph = useApp((s) => s.refreshGraph)
   const graphNodes = useApp((s) => s.graph.nodes)
@@ -105,7 +112,23 @@ export function NotePanel(): React.JSX.Element {
     <div className="flex h-full min-h-0 flex-col">
       <header className="border-b border-border px-3 py-2.5">
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
+          {trail.length > 0 && (
+            // Named, not a bare arrow. "Back" tells you a direction; "Back to the brief"
+            // tells you where you will land, which is the question after three links.
+            <Tooltip content={cameFrom ? `Back to ${cameFrom}` : 'Back'}>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={cameFrom ? `Back to ${cameFrom}` : 'Back'}
+                className="-ml-1 mt-px shrink-0"
+                onClick={goBackNode}
+              >
+                <ArrowLeft className="size-4" />
+              </Button>
+            </Tooltip>
+          )}
+
+          <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">{node.title}</h2>
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Badge tone="outline" className="px-1.5 py-0">

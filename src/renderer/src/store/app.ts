@@ -40,6 +40,8 @@ interface AppState {
   settings: Settings | null
 
   graph: GraphSnapshot
+  /** Notes visited before this one, oldest first. Bounded; see NODE_TRAIL_LIMIT. */
+  nodeTrail: string[]
   stats: GraphStats | null
   /**
    * Nodes to pulse once. `change` is something that was written; `probe` is
@@ -105,6 +107,13 @@ interface AppState {
   closeTool: () => void
   selectNode: (id: string | null) => void
   openNode: (id: string) => void
+  /**
+   * Back to the note this one was opened from.
+   *
+   * Following a wikilink is the main way to move around a vault, and following one had no
+   * inverse — the note you came from was gone unless you remembered its name.
+   */
+  goBackNode: () => void
   focusNodes: (ids: string[], note?: string | null) => void
   /** Stop attending to whatever the agent pointed at. */
   clearFocus: () => void
@@ -198,6 +207,14 @@ export function activeChat(state: AppState): ChatRuntime {
   return (state.session && state.chats[state.session.id]) || EMPTY_CHAT
 }
 
+/**
+ * How far back the note trail remembers.
+ *
+ * Deep enough to retrace a session's wandering, shallow enough that it is not a second copy
+ * of the vault's history sitting in memory for the life of the window.
+ */
+const NODE_TRAIL_LIMIT = 40
+
 const PULSE_RETENTION_MS = 1200
 
 /** Gap between one node lighting up and the next, when a search returns several. */
@@ -225,6 +242,7 @@ export const useApp = create<AppState>((set, get) => ({
   settings: null,
 
   graph: { nodes: [], edges: [], stamp: 0 },
+  nodeTrail: [],
   stats: null,
   pulses: [],
   focusRequest: null,
@@ -357,7 +375,33 @@ export const useApp = create<AppState>((set, get) => ({
 
   selectNode: (id) => set({ selectedNodeId: id }),
 
-  openNode: (id) => set({ selectedNodeId: id, panel: 'note' }),
+  openNode: (id) =>
+    set((state) => ({
+      selectedNodeId: id,
+      panel: 'note',
+      // Only a real move is remembered. Opening the note already open would otherwise fill
+      // the trail with the same id, and Back would appear to do nothing several times over.
+      nodeTrail:
+        state.selectedNodeId && state.selectedNodeId !== id
+          ? [...state.nodeTrail, state.selectedNodeId].slice(-NODE_TRAIL_LIMIT)
+          : state.nodeTrail
+    })),
+
+  goBackNode: () =>
+    set((state) => {
+      // Popped until something still in the graph turns up. A note followed and then trashed
+      // leaves an id behind, and going back to a note that no longer exists would show an
+      // empty panel with no way to explain itself.
+      const present = new Set(state.graph.nodes.map((node) => node.id))
+      const trail = [...state.nodeTrail]
+      while (trail.length > 0) {
+        const previous = trail.pop()
+        if (previous && present.has(previous)) {
+          return { nodeTrail: trail, selectedNodeId: previous, panel: 'note' as const }
+        }
+      }
+      return { nodeTrail: trail }
+    }),
 
   focusNodes: (ids, note = null) =>
     set({ focusRequest: { ids, note, stamp: Date.now() } }),

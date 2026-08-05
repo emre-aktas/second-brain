@@ -272,8 +272,25 @@ export function ChatPanel(): React.JSX.Element {
           <p className="mb-1.5 text-[11px] text-destructive">{attachError}</p>
         )}
 
-        <div className={cn('relative rounded-md', dragging && 'ring-2 ring-primary/50')}>
+        {/*
+          One surface, not a box inside a box.
+          
+          The controls used to float over the text with `pr-24` reserving space for them,
+          which meant the writing area was narrower than it looked and got stranger as the
+          field grew. They sit below the text now, inside the same border, and the border is
+          what shows focus — `focus-within` on the surface rather than a ring on the field,
+          so the thing that lights up is the thing the user thinks of as the input.
+        */}
+        <div
+          className={cn(
+            'rounded-lg border border-input bg-card/40 px-2.5 py-2',
+            'transition-[border-color,box-shadow] duration-150 ease-[var(--ease-out)]',
+            'focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/25',
+            dragging && 'border-primary/60 ring-2 ring-primary/40'
+          )}
+        >
           <Textarea
+            bare
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
@@ -295,18 +312,33 @@ export function ChatPanel(): React.JSX.Element {
                   ? 'Drop the image here'
                   // Short on purpose. A placeholder that wraps holds an *empty* composer
                   // open at two lines, because the browser counts it in `scrollHeight` —
-                  // so the longer sentence cost the field its one-line resting state. The
-                  // attach button beside it is where pasting an image is discoverable.
+                  // so the longer sentence cost the field its one-line resting state.
                   : 'Ask your brain anything'
                 : 'Install Claude Code to enable the agent'
             }
             disabled={!agentAvailable}
-            className="pr-24"
+            className="px-1 py-0.5"
           />
-          <div className="absolute bottom-2 right-2 flex items-center gap-1.5">
+
+          <div className="mt-1.5 flex items-center gap-1.5">
             <AttachButton onFiles={(files) => void addFiles(files)} disabled={!agentAvailable} />
+
+            {/* What this mode can do, where the typing happens. It was a sentence under the
+                box, a whole line away from the picker in the header that sets it. */}
+            <p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+              {CAPABILITY_HINT[capability]}
+            </p>
+
+            {/* Shown only once there is something to send, so the shortcut is taught at the
+                moment it becomes useful rather than sitting there as decoration. */}
+            {!busy && (draft.trim().length > 0 || attachments.length > 0) && (
+              <kbd className="shrink-0 rounded border border-border/80 bg-background px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+                ↵
+              </kbd>
+            )}
+
             {busy ? (
-              <Button size="sm" variant="secondary" onClick={interrupt}>
+              <Button size="sm" variant="secondary" onClick={interrupt} className="shrink-0">
                 Stop
               </Button>
             ) : (
@@ -314,15 +346,13 @@ export function ChatPanel(): React.JSX.Element {
                 size="sm"
                 onClick={submit}
                 disabled={(!draft.trim() && attachments.length === 0) || !agentAvailable}
+                className="shrink-0"
               >
                 Send
               </Button>
             )}
           </div>
         </div>
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {CAPABILITY_HINT[capability]}
-        </p>
       </div>
     </div>
   )

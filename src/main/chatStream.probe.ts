@@ -260,10 +260,11 @@ async function main(): Promise<void> {
     )
 
   const empty = await typeAndMeasure('')
-  // One line of text plus the padding and the controls in the corner. The upper bound is
-  // what fails if the placeholder ever grows long enough to wrap again: a wrapping
-  // placeholder counts towards `scrollHeight` and holds an empty field open at two lines.
-  check('the composer starts as one line', empty > 30 && empty < 56, { empty })
+  // The field itself, which is bare now — the surface around it owns the border and the
+  // padding, so this is one line of text and nothing else. The upper bound is what fails if
+  // the placeholder ever grows long enough to wrap again: a wrapping placeholder counts
+  // towards `scrollHeight` and holds an empty field open at two lines.
+  check('the composer starts as one line', empty > 18 && empty < 34, { empty })
 
   const threeLines = await typeAndMeasure('one\ntwo\nthree')
   check('and grows with the content', threeLines > empty + 20, { empty, threeLines })

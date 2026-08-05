@@ -205,6 +205,15 @@ export function GraphCanvas({
    * rule is last-read-wins, held until the next read or the end of the turn.
    */
   const liveIdsRef = useRef<Set<string>>(new Set())
+  /**
+   * The camera to come back to when the agent has finished, and whether it is still ours.
+   *
+   * Leaning in on what is being read is only welcome if the graph goes back afterwards —
+   * otherwise a conversation slowly walks the view somewhere the user never chose. And it is
+   * abandoned the moment they touch the view themselves: overruling a deliberate pan to
+   * restore a position the app picked would be the rudest thing here.
+   */
+  const autoFrameRef = useRef<{ restore: Camera; ours: boolean } | null>(null)
   const tweenRef = useRef(new CameraTween())
   const viewportRef = useRef({ width: 1, height: 1 })
   const dprRef = useRef(1)
@@ -487,33 +496,6 @@ export function GraphCanvas({
     return () => document.removeEventListener('visibilitychange', onChange)
   }, [])
 
-  /* ------------------------------------------------------ the live wiring */
-
-  useEffect(() => {
-    if (!agentBusy) {
-      // Ending the turn is the only thing that empties this. Doing it here rather than on
-      // a timer means the wiring goes quiet at exactly the moment the answer lands.
-      if (liveIdsRef.current.size > 0) {
-        liveIdsRef.current = new Set()
-        needsDrawRef.current = true
-      }
-      return
-    }
-
-    // Only when there is a new read to show. An empty `pulses` means the last one has
-    // faded, not that the agent has moved on — so the previous marker stays.
-    const fresh = pulses.length > 0 ? pulses.map((pulse) => pulse.id) : [...focusIds]
-    if (fresh.length === 0) return
-
-    const next = new Set(fresh.slice(0, MAX_LIVE_NODES))
-    const previous = liveIdsRef.current
-    const same = next.size === previous.size && [...next].every((id) => previous.has(id))
-    if (same) return
-
-    liveIdsRef.current = next
-    needsDrawRef.current = true
-  }, [agentBusy, pulses, focusIds])
-
   /* ------------------------------------------------------------ projection */
 
   /**
@@ -623,27 +605,103 @@ export function GraphCanvas({
     [projectAll, reduceMotion]
   )
 
+  /**
+   * Bring a handful of nodes into view.
+   *
+   * Shared by the agent's explicit focus and by the automatic framing below, because they
+   * are the same operation with different reasons — and two copies of the projection,
+   * bounds and tween dance would drift.
+   *
+   * Returns the camera it started from, so a caller that means to undo itself later can
+   * keep it. Null when there was nothing on screen to frame.
+   */
+  const frameIds = useCallback(
+    (ids: Iterable<string>, opts: { padding: number; maxScale: number; ms: number }): Camera | null => {
+      const view = projectAll()
+      const count = viewCountRef.current
+      const points: { x: number; y: number }[] = []
+      for (const id of ids) {
+        const index = indexRef.current.get(id)
+        if (index === undefined || index >= count) continue
+        points.push({ x: view[index * VIEW_STRIDE], y: view[index * VIEW_STRIDE + 1] })
+      }
+
+      const bounds = boundsOf(points)
+      if (!bounds) return null
+
+      const from = { ...cameraRef.current }
+      const target = cameraForBounds(
+        bounds,
+        viewportRef.current,
+        cameraRef.current,
+        opts.padding,
+        opts.maxScale
+      )
+      if (reduceMotion) cameraRef.current = target
+      else tweenRef.current.start(cameraRef.current, target, opts.ms)
+      needsDrawRef.current = true
+      return from
+    },
+    [projectAll, reduceMotion]
+  )
+
   // Focus request from the agent or the UI.
   useEffect(() => {
     if (!focusRequest || focusRequest.ids.length === 0) return
+    frameIds(focusRequest.ids, { padding: 140, maxScale: 1.5, ms: 520 })
+  }, [focusRequest, frameIds])
 
-    const view = projectAll()
-    const count = viewCountRef.current
-    const points: { x: number; y: number }[] = []
-    for (const id of focusRequest.ids) {
-      const index = indexRef.current.get(id)
-      if (index === undefined || index >= count) continue
-      points.push({ x: view[index * VIEW_STRIDE], y: view[index * VIEW_STRIDE + 1] })
+  /* ------------------------------------------------------ the live wiring */
+
+  useEffect(() => {
+    if (!agentBusy) {
+      // Ending the turn is the only thing that empties this. Doing it here rather than on
+      // a timer means the wiring goes quiet at exactly the moment the answer lands.
+      if (liveIdsRef.current.size > 0) {
+        liveIdsRef.current = new Set()
+        needsDrawRef.current = true
+      }
+      return
     }
 
-    const bounds = boundsOf(points)
-    if (!bounds) return
+    // Only when there is a new read to show. An empty `pulses` means the last one has
+    // faded, not that the agent has moved on — so the previous marker stays.
+    const fresh = pulses.length > 0 ? pulses.map((pulse) => pulse.id) : [...focusIds]
+    if (fresh.length === 0) return
 
-    const target = cameraForBounds(bounds, viewportRef.current, cameraRef.current, 140, 1.5)
-    if (reduceMotion) cameraRef.current = target
-    else tweenRef.current.start(cameraRef.current, target, 520)
+    const next = new Set(fresh.slice(0, MAX_LIVE_NODES))
+    const previous = liveIdsRef.current
+    const same = next.size === previous.size && [...next].every((id) => previous.has(id))
+    if (same) return
+
+    liveIdsRef.current = next
     needsDrawRef.current = true
-  }, [focusRequest, projectAll, reduceMotion])
+
+    // Lean in on what it is reading. Under reduced motion this does not happen at all: the
+    // marker and the wiring already say where the work is, and a camera that travels is the
+    // one part of this that is movement rather than information.
+    if (reduceMotion) return
+
+    if (!autoFrameRef.current) autoFrameRef.current = { restore: { ...cameraRef.current }, ours: true }
+    if (!autoFrameRef.current.ours) return
+
+    // Generous padding and a modest ceiling on the zoom: the point is to make the node
+    // legible, not to fill the canvas with it and lose the neighbourhood that explains it.
+    frameIds(next, { padding: 200, maxScale: 1.35, ms: 620 })
+  }, [agentBusy, pulses, focusIds, reduceMotion, frameIds])
+
+  // And back out when the turn is over.
+  useEffect(() => {
+    if (agentBusy) return
+    const framed = autoFrameRef.current
+    autoFrameRef.current = null
+    if (!framed || !framed.ours || reduceMotion) return
+
+    // Slower coming back than going in. Arriving is a cut to what matters; leaving is the
+    // view being handed back, and being handed something quickly feels like losing it.
+    tweenRef.current.start(cameraRef.current, framed.restore, 760)
+    needsDrawRef.current = true
+  }, [agentBusy, reduceMotion])
 
   /* ------------------------------------------------------------- resize */
 
@@ -1370,6 +1428,9 @@ export function GraphCanvas({
 
     canvasRef.current?.setPointerCapture(event.pointerId)
     tweenRef.current.cancel()
+    // Theirs now. Not just for this gesture: a restore that fought a pan the user had just
+    // made would undo a deliberate act to reinstate an automatic one.
+    if (autoFrameRef.current) autoFrameRef.current.ours = false
 
     // Shift, or the middle button, takes over the orbit. Both are additive: the left
     // button on its own still means what it always meant, so nothing a user already knows
@@ -1512,6 +1573,7 @@ export function GraphCanvas({
     event.preventDefault()
     const point = localPoint(event)
     tweenRef.current.cancel()
+    if (autoFrameRef.current) autoFrameRef.current.ours = false
 
     const factor = Math.pow(0.998, event.deltaY)
     cameraRef.current = zoomAt(cameraRef.current, viewportRef.current, point.x, point.y, factor)
