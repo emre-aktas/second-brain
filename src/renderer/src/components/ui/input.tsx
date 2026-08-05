@@ -1,4 +1,4 @@
-import { forwardRef } from 'react'
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 
 const fieldBase = [
@@ -26,12 +26,72 @@ export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTML
 
 export const Textarea = forwardRef<
   HTMLTextAreaElement,
-  React.TextareaHTMLAttributes<HTMLTextAreaElement>
->(function Textarea({ className, ...props }, ref) {
+  React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+    /**
+     * Grow with the content rather than scrolling inside a fixed box.
+     *
+     * Opt-in, because a form field of a known size should stay that size — this is for the
+     * one field whose whole job is not knowing in advance how much will be typed into it.
+     */
+    autoGrow?: boolean
+    /** Tallest it may get, in CSS pixels. Past this it scrolls, as before. */
+    maxHeight?: number
+  }
+>(function Textarea({ className, autoGrow = false, maxHeight = 240, ...props }, ref) {
+  const innerRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const measure = useCallback(() => {
+    const element = innerRef.current
+    if (!element || !autoGrow) return
+
+    // Released first. `scrollHeight` reports the content height only when the box is not
+    // already holding it open, so measuring without this can grow but never shrink —
+    // deleting a paragraph would leave the field the size it had reached.
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`
+    element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [autoGrow, maxHeight])
+
+  // After layout, not after paint: measuring in `useEffect` lets the browser show one frame
+  // at the old height, which is a visible flicker on every keystroke that changes the line
+  // count.
+  useLayoutEffect(measure, [measure, props.value])
+
+  useEffect(() => {
+    const element = innerRef.current
+    if (!autoGrow || !element || typeof ResizeObserver === 'undefined') return
+
+    // The panel this sits in is resizable, so the same text wraps to a different number of
+    // lines without the value changing at all.
+    //
+    // Width only. A ResizeObserver on this element also fires for the height *we* just set,
+    // and re-measuring on that is a loop.
+    let lastWidth = -1
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? -1
+      if (Math.abs(width - lastWidth) < 0.5) return
+      lastWidth = width
+      measure()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [autoGrow, measure])
+
   return (
     <textarea
-      ref={ref}
-      className={cn(fieldBase, 'min-h-20 resize-none px-3 py-2 leading-relaxed', className)}
+      ref={(element) => {
+        innerRef.current = element
+        if (typeof ref === 'function') ref(element)
+        else if (ref) ref.current = element
+      }}
+      className={cn(
+        fieldBase,
+        'resize-none px-3 py-2 leading-relaxed',
+        // One line's worth, plus room for the controls that sit in the corner of the chat
+        // input. Any lower and the buttons would overlap the first line of text.
+        autoGrow ? 'min-h-[46px]' : 'min-h-20',
+        className
+      )}
       {...props}
     />
   )

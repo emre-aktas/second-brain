@@ -619,7 +619,14 @@ function wireEvents(set: Setter, get: () => AppState): void {
   })
 
   onEvent('chat:question', (question) => {
-    set((state) => ({ questions: [...state.questions, question] }))
+    set((state) => {
+      // Keyed by id, because the same question can arrive twice: the event is broadcast to
+      // every window, and a tool's popped-out window subscribes to it on its own account as
+      // well. Appended blindly, the user saw the same question card twice with the same
+      // buttons — and answering one left the other on screen.
+      if (state.questions.some((existing) => existing.id === question.id)) return state
+      return { questions: [...state.questions, question] }
+    })
   })
 
   onEvent('chat:questionResolved', ({ id }) => {

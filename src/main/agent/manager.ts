@@ -1,4 +1,4 @@
-import type {
+import type { TurnFollowups,
   AgentCapability,
   AgentEffort,
   AgentEvent,
@@ -52,6 +52,8 @@ interface Runtime {
   turnOutputTokens: number
   /** When the current turn began, so the finished message can carry its duration. */
   turnStartedAt: number | null
+  /** What the agent offered as a next step, if it offered anything. */
+  followups: TurnFollowups | null
   lastActivity: number
   /** Set for the duration of a turn started by running a saved tool. */
   activeToolRun: { toolId: string } | null
@@ -98,6 +100,13 @@ export class AgentManager {
         core: this.core,
         integrations: this.integrations,
         emitGenUi: (spec, sessionId) => this.handleGenUi(spec, sessionId),
+        suggestFollowups: (followups, sessionId) => {
+          // Held on the runtime rather than written straight to the message: the turn's own
+          // message is not finalised yet, and the `result` handler already makes exactly one
+          // meta write. Two writers to one JSON column is how a partial write loses a field.
+          const runtime = sessionId ? this.runtimes.get(sessionId) : undefined
+          if (runtime) runtime.followups = followups
+        },
         focusGraph: (nodeIds, opts) =>
           this.core.broadcast('graph:focus', { nodeIds, note: opts.note ?? null, depth: opts.depth ?? 0 }),
         probeGraph: (nodeIds, label) => {
@@ -287,6 +296,7 @@ export class AgentManager {
     runtime.turnStartedAt = Date.now()
     runtime.turnInputTokens = 0
     runtime.turnOutputTokens = 0
+    runtime.followups = null
     this.emit({ type: 'state', sessionId: session.id, state: 'thinking' })
     // Zero it on screen too, so the previous answer's total is not what the user watches
     // for the second or two before the first usage frame arrives.
@@ -426,6 +436,7 @@ export class AgentManager {
       turnInputTokens: 0,
       turnOutputTokens: 0,
       turnStartedAt: null,
+      followups: null,
       lastActivity: Date.now(),
       activeToolRun: null,
       activeAction: null
@@ -730,7 +741,8 @@ export class AgentManager {
                     inputTokens: runtime.turnInputTokens,
                     outputTokens: runtime.turnOutputTokens
                   }
-                : {})
+                : {}),
+              ...(runtime.followups ? { followups: runtime.followups } : {})
             })
 
             if (updated) {
@@ -742,6 +754,7 @@ export class AgentManager {
         runtime.streamingMessageId = null
         runtime.streamedText = ''
         runtime.turnStartedAt = null
+        runtime.followups = null
 
         this.core.recordActivity({
           kind: 'agent.turn',

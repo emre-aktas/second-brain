@@ -1,4 +1,4 @@
-import type {
+import type { TurnFollowups,
   BrainNode,
   EdgeKind,
   IntegrationManifest,
@@ -40,6 +40,8 @@ export interface ToolDeps {
   emitGenUi: (spec: GenUiSpec, sessionId: string | null) => string
   /** Drive the main graph canvas. */
   focusGraph: (nodeIds: string[], opts: { note?: string; depth?: number }) => void
+  /** Offer the user a next step. Attached to the turn's message when it finishes. */
+  suggestFollowups: (followups: TurnFollowups, sessionId: string | null) => void
   /**
    * Show that these nodes were just read, in the order they came back.
    *
@@ -659,6 +661,66 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
     },
 
     /* ---------------------------------------------------------------- ui */
+    {
+      name: 'suggest_followups',
+      description:
+        'Offer the user one or two next steps at the end of your turn: saving this work as a reusable tool, and/or putting it on a schedule. Call it only when the work you just did is genuinely repeatable — a shape of request the user will make again, or a check worth running on a clock. Do not call it out of habit, do not offer both when only one fits, and never offer a schedule for something that only made sense once. The user sees a small button; nothing is created unless they press it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tool: {
+            type: 'object',
+            description:
+              'Offer to save this as a tool. { name: what to call it, why: one short line on when they would use it }',
+            properties: {
+              name: { type: 'string' },
+              why: { type: 'string' }
+            },
+            required: ['name', 'why']
+          },
+          schedule: {
+            type: 'object',
+            description:
+              'Offer to run this on a schedule. { name, when: plain English like "every weekday at 9am", why: one short line }',
+            properties: {
+              name: { type: 'string' },
+              when: { type: 'string' },
+              why: { type: 'string' }
+            },
+            required: ['name', 'when', 'why']
+          }
+        }
+      },
+      handler: (args, ctx) => {
+        const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
+
+        const rawTool = args['tool'] as Record<string, unknown> | undefined
+        const rawSchedule = args['schedule'] as Record<string, unknown> | undefined
+
+        const followups: TurnFollowups = {}
+        if (rawTool && text(rawTool['name'])) {
+          followups.tool = { name: text(rawTool['name']), why: text(rawTool['why']) }
+        }
+        if (rawSchedule && text(rawSchedule['name']) && text(rawSchedule['when'])) {
+          followups.schedule = {
+            name: text(rawSchedule['name']),
+            when: text(rawSchedule['when']),
+            why: text(rawSchedule['why'])
+          }
+        }
+
+        if (!followups.tool && !followups.schedule) {
+          return fail(
+            'Give at least one of `tool` or `schedule`, and a name for whichever you give.'
+          )
+        }
+
+        deps.suggestFollowups(followups, ctx.sessionId)
+        return ok(
+          'Offered. It appears under your reply when the turn ends, so say nothing more about it.'
+        )
+      }
+    },
     {
       name: 'render_ui',
       description:

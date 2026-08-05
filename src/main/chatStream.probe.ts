@@ -202,6 +202,88 @@ async function main(): Promise<void> {
   await settle(2600)
   check('the caption clears itself', (await occurrences(win, 'Looking for')) === 0)
 
+  /* --------------------------------------------- one question, one card -- */
+
+  log('\na question that arrives twice')
+
+  const QUESTION = 'That thread — draft a reply?'
+  const ask = {
+    id: 'q1',
+    sessionId: SESSION_ID,
+    question: QUESTION,
+    options: ['Yes', 'Only that one', 'Not now'],
+    allowFreeText: true,
+    askedAt: Date.now()
+  }
+
+  // Twice, deliberately. The event is broadcast to every window and a popped-out tool
+  // subscribes on its own account, so the renderer really does see repeats — and appended
+  // blindly the user got the same card twice, with answering one leaving the other behind.
+  broadcaster.send('chat:question', ask)
+  broadcaster.send('chat:question', ask)
+  await settle(400)
+
+  const cards = await occurrences(win, QUESTION)
+  check('a repeated question renders once', cards === 1, { cards })
+
+  broadcaster.send('chat:questionResolved', { id: 'q1' })
+  await settle(300)
+  check('and answering it clears the card', (await occurrences(win, QUESTION)) === 0)
+
+  /* ------------------------------------------------ the input grows ------ */
+
+  log('\nthe composer')
+
+  /**
+   * Type into the real field, through React.
+   *
+   * A controlled textarea ignores a plain `element.value = ...` — React's own value tracker
+   * sees no change and the state never updates, so the field would snap back on the next
+   * render and the measurement would be of nothing. Going through the prototype's setter is
+   * what makes the synthetic input event indistinguishable from a keystroke.
+   */
+  const typeAndMeasure = async (text: string): Promise<number> =>
+    Number(
+      await win.webContents.executeJavaScript(
+        `(() => {
+           const el = document.querySelector('textarea');
+           if (!el) return -1;
+           const setter = Object.getOwnPropertyDescriptor(
+             HTMLTextAreaElement.prototype,
+             'value'
+           ).set;
+           setter.call(el, ${JSON.stringify(text)});
+           el.dispatchEvent(new Event('input', { bubbles: true }));
+           return el.getBoundingClientRect().height;
+         })()`
+      )
+    )
+
+  const empty = await typeAndMeasure('')
+  // One line of text plus the padding and the controls in the corner. The upper bound is
+  // what fails if the placeholder ever grows long enough to wrap again: a wrapping
+  // placeholder counts towards `scrollHeight` and holds an empty field open at two lines.
+  check('the composer starts as one line', empty > 30 && empty < 56, { empty })
+
+  const threeLines = await typeAndMeasure('one\ntwo\nthree')
+  check('and grows with the content', threeLines > empty + 20, { empty, threeLines })
+
+  // Back to one line. Growing without shrinking is the usual half-implementation: the field
+  // reaches the height of the longest thing ever typed into it and stays there.
+  const shrunk = await typeAndMeasure('one')
+  check('and shrinks again when the text is deleted', shrunk <= empty + 2, { empty, shrunk })
+
+  const tall = await typeAndMeasure(Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'))
+  check('it stops at the ceiling rather than eating the chat', tall <= 244, { tall })
+  check('and the ceiling is taller than three lines', tall > threeLines, { threeLines, tall })
+
+  const overflow = await win.webContents.executeJavaScript(
+    `getComputedStyle(document.querySelector('textarea')).overflowY`
+  )
+  check('past the ceiling it scrolls inside itself', String(overflow) === 'auto', { overflow })
+
+  await typeAndMeasure('')
+
   const shot = await win.webContents.capturePage()
   writeFileSync(join(OUT, 'chat-stream.png'), shot.toPNG())
   log(`  wrote ${join(OUT, 'chat-stream.png')}`)

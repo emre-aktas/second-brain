@@ -191,6 +191,21 @@ export type ChatBlock =
     }
   | { type: 'genui'; specId: string }
 
+/**
+ * What the agent thinks the user might want next.
+ *
+ * Offered rather than done. Two things this app can do that a chat cannot — save the work as
+ * a reusable tool, or put it on a schedule — and the agent is the only party that knows
+ * whether either applies to what just happened. Clicking one sends a message; nothing is
+ * created behind the user's back.
+ */
+export interface TurnFollowups {
+  /** The work is worth repeating on demand. */
+  tool?: { name: string; why: string }
+  /** The work is worth repeating on a clock. */
+  schedule?: { name: string; when: string; why: string }
+}
+
 export interface ChatMessageMeta {
   costUsd?: number
   durationMs?: number
@@ -206,6 +221,7 @@ export interface ChatMessageMeta {
   model?: string
   numTurns?: number
   isError?: boolean
+  followups?: TurnFollowups
   /**
    * Set when this turn was started by running a saved tool rather than typed.
    * The chat renders it as a tool invocation with its own output surface instead

@@ -20,6 +20,7 @@ import { AttachButton, AttachmentStrip, readImageFiles } from './Attachments'
 import { QuestionCard } from './QuestionCard'
 import { TouchedNotes, touchedNotes } from './TouchedNotes'
 import { LiveTurnMeter, TurnMeter } from './TurnMeter'
+import { Followups } from './Followups'
 
 const CAPABILITY_LABEL: Record<AgentCapability, string> = {
   'read-only': 'Read only',
@@ -207,8 +208,10 @@ export function ChatPanel(): React.JSX.Element {
                 genui={genui}
                 nodes={nodes}
                 showActivity={showActivity}
+                busy={busy}
                 onOpenNode={openNode}
                 onFocusNodes={focusNodes}
+                onFollowup={(prompt) => void sendMessage(prompt)}
               />
             </div>
           ))}
@@ -281,12 +284,20 @@ export function ChatPanel(): React.JSX.Element {
               event.preventDefault()
               void addFiles(files)
             }}
-            rows={3}
+            autoGrow
+            // Roughly ten lines. Past that the transcript is what the user should be
+            // looking at, not the box they are typing into.
+            maxHeight={240}
+            rows={1}
             placeholder={
               agentAvailable
                 ? dragging
                   ? 'Drop the image here'
-                  : 'Ask your brain anything — paste an image too'
+                  // Short on purpose. A placeholder that wraps holds an *empty* composer
+                  // open at two lines, because the browser counts it in `scrollHeight` —
+                  // so the longer sentence cost the field its one-line resting state. The
+                  // attach button beside it is where pasting an image is discoverable.
+                  : 'Ask your brain anything'
                 : 'Install Claude Code to enable the agent'
             }
             disabled={!agentAvailable}
@@ -445,15 +456,19 @@ function TurnView({
   genui,
   nodes,
   showActivity,
+  busy,
   onOpenNode,
-  onFocusNodes
+  onFocusNodes,
+  onFollowup
 }: {
   turn: Turn
   genui: Record<string, import('@shared/genui').GenUiSpec>
   nodes: import('@shared/types').GraphNodeLite[]
   showActivity: boolean
+  busy: boolean
   onOpenNode: (id: string) => void
   onFocusNodes: (ids: string[], note?: string | null) => void
+  onFollowup: (prompt: string) => void
 }): React.JSX.Element {
   const toolRun = turn.userMessage?.meta?.toolRun ?? null
   const taskRun = turn.userMessage?.meta?.taskRun ?? null
@@ -585,12 +600,20 @@ function TurnView({
           {(() => {
             const meta = turn.assistantMessages.at(-1)?.meta
             return (
-              <TurnMeter
-                durationMs={meta?.durationMs}
-                inputTokens={meta?.inputTokens}
-                outputTokens={meta?.outputTokens}
-                className="mt-0.5"
-              />
+              <>
+                <Followups
+                  followups={meta?.followups}
+                  disabled={busy}
+                  onChoose={onFollowup}
+                  className="mt-0.5"
+                />
+                <TurnMeter
+                  durationMs={meta?.durationMs}
+                  inputTokens={meta?.inputTokens}
+                  outputTokens={meta?.outputTokens}
+                  className="mt-0.5"
+                />
+              </>
             )
           })()}
         </div>
