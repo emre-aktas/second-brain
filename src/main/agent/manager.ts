@@ -68,6 +68,8 @@ export class AgentManager {
   readonly questions: QuestionBroker
   /** Set by the bootstrap so a tool the agent creates gets its shortcut bound. */
   onShortcutsChanged: (() => void) | null = null
+  /** Set by the app so the scheduler can re-arm a task the agent just changed. */
+  onTaskChanged: ((taskId: string) => void) | null = null
   /** Set by the bootstrap; lets the agent see a rendering of what it built. */
   previewer: ToolPreviewer | null = null
   private binary: string | null = null
@@ -105,6 +107,7 @@ export class AgentManager {
             allowFreeText: input.allowFreeText
           }),
         syncShortcuts: () => this.onShortcutsChanged?.(),
+        rescheduleTask: (taskId) => this.onTaskChanged?.(taskId),
         previewTool: (input) => {
           if (!this.previewer) throw new Error('previews are unavailable')
           return this.previewer.capture(input)
@@ -451,6 +454,22 @@ export class AgentManager {
 
   /* --------------------------------------------------------------- events */
 
+  /**
+   * Main-process observers of agent events.
+   *
+   * `emit` used to broadcast to windows and nothing else, which meant nothing inside
+   * main could tell when a turn finished — the scheduler cannot record the outcome of
+   * a run it started, and the notifier cannot know a reply has landed. Both need to
+   * watch the same stream the renderer sees, so it forks here rather than each of
+   * them reaching into the runtime map and guessing.
+   */
+  private observers = new Set<(event: AgentEvent) => void>()
+
+  onAgentEvent(listener: (event: AgentEvent) => void): () => void {
+    this.observers.add(listener)
+    return () => this.observers.delete(listener)
+  }
+
   private emit(event: AgentEvent): void {
     // The result of a turn is the event a tool is waiting on, so it is worth a
     // line: "produced but not delivered" and "never produced" look identical from
@@ -463,6 +482,49 @@ export class AgentManager {
       )
     }
     this.core.broadcast('agent:event', event)
+
+    // After the broadcast, and each one isolated: an observer that throws must not
+    // stop the windows from having been told, nor take the next observer down with it.
+    for (const observer of this.observers) {
+      try {
+        observer(event)
+      } catch (err) {
+        log.warn('an agent event observer threw', err)
+      }
+    }
+  }
+
+  /**
+   * Wait for the turn running in `sessionId` to settle.
+   *
+   * Resolves with the reply on success and rejects on error, so a caller that started
+   * a turn can record what came of it. The timeout is a backstop rather than a limit:
+   * a turn that legitimately waits on `ask_user` gets four minutes from the CLI, and a
+   * scheduled run that stalls has to release its slot or the scheduler wedges.
+   */
+  awaitTurn(sessionId: string, timeoutMs = 15 * 60_000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let done = false
+
+      const settle = (fn: () => void): void => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        off()
+        fn()
+      }
+
+      const timer = setTimeout(
+        () => settle(() => reject(new Error('the turn produced nothing for fifteen minutes'))),
+        timeoutMs
+      )
+
+      const off = this.onAgentEvent((event) => {
+        if (event.sessionId !== sessionId) return
+        if (event.type === 'result') settle(() => resolve(event.text ?? ''))
+        else if (event.type === 'error') settle(() => reject(new Error(event.message)))
+      })
+    })
   }
 
   private onEvent(sessionId: string, event: ClaudeStreamEvent, proc: ClaudeProcess): void {

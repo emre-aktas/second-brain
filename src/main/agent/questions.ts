@@ -28,6 +28,17 @@ export class QuestionBroker {
 
   constructor(private broadcast: (channel: string, payload: unknown) => void) {}
 
+  /**
+   * Told whenever a question is raised.
+   *
+   * Questions do not travel as `AgentEvent`s — they have their own channel, because a
+   * turn blocks on one — so anything in main that needs to react has to be told here.
+   * The notifier is the caller: a question is the one thing worth interrupting for,
+   * since the turn is stopped until it is answered and the chat that asked may not be
+   * the one on screen.
+   */
+  onAsk: ((question: PendingQuestion) => void) | null = null
+
   ask(input: {
     sessionId: string
     question: string
@@ -55,6 +66,11 @@ export class QuestionBroker {
 
       this.waiting.set(question.id, { question, resolve, timer })
       this.broadcast('chat:question', question)
+      try {
+        this.onAsk?.(question)
+      } catch (err) {
+        log.warn('a question listener threw', err)
+      }
     })
   }
 

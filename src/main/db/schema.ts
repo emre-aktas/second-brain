@@ -273,6 +273,46 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_nodes_expires ON nodes(expires_at)
         WHERE expires_at IS NOT NULL;
     `
+  },
+  {
+    version: 12,
+    name: 'scheduled-tasks',
+    up: `
+      -- Work the app does on its own clock: the hourly check-in it runs for itself,
+      -- and anything the user asked for in passing ("every hour, scan Slack").
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        -- What the agent is actually asked. Empty for 'heartbeat', which builds its
+        -- prompt from whatever the pre-check found rather than from a fixed string.
+        prompt        TEXT NOT NULL DEFAULT '',
+        -- 'task' is an ordinary scheduled job; 'heartbeat' is the built-in check-in,
+        -- which is gated behind a deterministic pre-check so an idle hour is free.
+        kind          TEXT NOT NULL DEFAULT 'task',
+        schedule      TEXT NOT NULL,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        capability    TEXT NOT NULL DEFAULT 'curate',
+        model         TEXT,
+        effort        TEXT,
+        -- Each task keeps its own chat, so a run never lands in the middle of the
+        -- conversation the user is having and its history reads as one thread.
+        session_id    TEXT,
+        created_by    TEXT NOT NULL DEFAULT 'user',
+        created_at    INTEGER NOT NULL,
+        updated_at    INTEGER NOT NULL,
+        next_run_at   INTEGER,
+        last_run_at   INTEGER,
+        -- 'ok' | 'error' | 'skipped'. 'skipped' is the common one and is not a
+        -- failure: it means the pre-check found nothing worth spending a turn on.
+        last_status   TEXT,
+        last_summary  TEXT,
+        run_count     INTEGER NOT NULL DEFAULT 0
+      );
+
+      -- The scheduler's only hot query: what is due?
+      CREATE INDEX IF NOT EXISTS idx_tasks_due ON scheduled_tasks(next_run_at)
+        WHERE enabled = 1;
+    `
   }
 ]
 

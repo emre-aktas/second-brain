@@ -17,6 +17,7 @@ import { AUTHORABLE_KINDS, NODE_KINDS } from '@shared/node-kinds'
 // Bundled rather than read from disk: it documents the runtime, so it has to ship in
 // lockstep with the runtime it describes and get reviewed like the code it documents.
 import TOOL_API_REFERENCE from '../../../TOOL_API.md?raw'
+import { describeSchedule } from '@shared/schedule'
 import type { BrainCore } from '../core'
 import { StaleToolWriteError } from '../db/tools'
 import { clearToolErrors, readToolErrors } from '../toolErrors'
@@ -58,6 +59,14 @@ export interface ToolDeps {
   integrations: IntegrationBridge
   /** Rebind global shortcuts after a tool changes. */
   syncShortcuts: () => void
+  /**
+   * Recompute when a scheduled task is next due.
+   *
+   * Called after the agent creates or edits one, because the stored next-run time
+   * belongs to the old schedule — a task moved from hourly to weekly would otherwise
+   * still fire within the hour.
+   */
+  rescheduleTask: (taskId: string) => void
   /** Render a tool offscreen and return a PNG, so the agent can look at it. */
   previewTool: (input: {
     toolId: string
@@ -996,6 +1005,175 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
         return ok(
           `Saved "${tool.name}" to the user's Tools panel${tool.pinned ? ' and pinned it' : ''}. Tell them it is there and what it does.`
         )
+      }
+    },
+    {
+      name: 'create_scheduled_task',
+      description:
+        'Set up work the app will do on its own clock — "every hour, scan Slack and compile what is new", "every weekday at 9, summarise what changed yesterday". Use this the moment the user asks for something recurring; do not offer to remind them yourself, because you are not running between turns. Each task keeps its own chat, so a run never appears in the middle of this conversation. The user can see, pause and delete every one of these in the Tasks tab.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Two to four words, how it will appear in the Tasks tab. E.g. "Slack digest".'
+          },
+          prompt: {
+            type: 'string',
+            description:
+              'What you will be asked, every time it runs. Write it for a future you with no memory of this conversation: state the job, where to look, and what to produce. Say what to do when there is nothing to report, or you will produce noise on a quiet day.'
+          },
+          schedule: {
+            type: 'object',
+            description:
+              'One of: {kind:"hourly", minute} - {kind:"daily", hour, minute} - {kind:"weekly", days:[0-6, 0 is Sunday], hour, minute} - {kind:"interval", everyMinutes}. Local time. Prefer hourly or daily; an interval under 5 minutes is refused, because every run spends the usage on the user own subscription.'
+          },
+          capability: {
+            type: 'string',
+            enum: ['read-only', 'curate', 'build'],
+            description:
+              'Default "curate". Use "read-only" for something that only reports, which is the safer choice for anything unattended.'
+          }
+        },
+        required: ['name', 'prompt', 'schedule']
+      },
+      mutating: true,
+      handler: (args) => {
+        const name = str(args, 'name')
+        const prompt = str(args, 'prompt')
+        if (!name || !prompt) return fail('name and prompt are required')
+
+        const capability = str(args, 'capability')
+        const task = core.tasks.save({
+          name,
+          prompt,
+          schedule: args['schedule'],
+          capability:
+            capability === 'read-only' || capability === 'build' || capability === 'curate'
+              ? capability
+              : 'curate',
+          createdBy: 'agent'
+        })
+
+        deps.rescheduleTask(task.id)
+
+        core.recordActivity({
+          kind: 'task.created',
+          actor: 'agent',
+          title: `Scheduled "${task.name}"`,
+          detail: { taskId: task.id, schedule: describeSchedule(task.schedule) }
+        })
+        core.broadcast('tasks:changed')
+
+        const fresh = core.tasks.get(task.id)!
+        return ok(
+          `"${fresh.name}" will run ${describeSchedule(fresh.schedule)}${
+            fresh.nextRunAt ? `, next at ${new Date(fresh.nextRunAt).toLocaleString()}` : ''
+          }. It writes into its own chat. Tell them it is set up, in one line, and that the Tasks tab is where to pause it.`
+        )
+      }
+    },
+    {
+      name: 'list_scheduled_tasks',
+      description:
+        'Everything the app runs on its own clock, with when each is next due and how the last run went. Read this before creating a task, so you extend an existing one instead of adding a second that does the same job.',
+      inputSchema: { type: 'object', properties: {} },
+      handler: () => {
+        const tasks = core.tasks.list()
+        if (tasks.length === 0) return ok('No scheduled tasks yet.')
+
+        const proactive = core.settings.proactive
+        const lines = tasks.map((task) => {
+          const when = task.enabled
+            ? task.nextRunAt
+              ? `next ${new Date(task.nextRunAt).toLocaleString()}`
+              : 'not scheduled'
+            : 'paused'
+          const last =
+            task.lastStatus === null
+              ? 'never run'
+              : `last ${task.lastStatus}${task.lastSummary ? `: ${task.lastSummary.slice(0, 120)}` : ''}`
+          return `- [${task.id}] "${task.name}" — ${describeSchedule(task.schedule)}, ${when}. ${last}`
+        })
+
+        return ok(
+          [
+            proactive.enabled
+              ? 'Proactive work is on.'
+              : 'Proactive work is OFF, so none of these will run until the user turns it back on in the Tasks tab.',
+            ...lines
+          ].join('\n')
+        )
+      }
+    },
+    {
+      name: 'update_scheduled_task',
+      description:
+        'Change a task: its name, its prompt, when it runs, or whether it is paused. Prefer this over creating a second task for a job that already exists.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          taskId: { type: 'string' },
+          name: { type: 'string' },
+          prompt: { type: 'string' },
+          schedule: { type: 'object', description: 'Same shape as create_scheduled_task.' },
+          enabled: { type: 'boolean', description: 'False pauses it without deleting it.' }
+        },
+        required: ['taskId']
+      },
+      mutating: true,
+      handler: (args) => {
+        const taskId = str(args, 'taskId')
+        if (!taskId) return fail('taskId is required')
+
+        const task = core.tasks.get(taskId)
+        if (!task) return fail(`no task with id ${taskId}`)
+
+        const enabled = args['enabled']
+        const updated = core.tasks.save({
+          id: taskId,
+          name: str(args, 'name') ?? task.name,
+          prompt: str(args, 'prompt') ?? task.prompt,
+          schedule: args['schedule'] !== undefined ? args['schedule'] : task.schedule,
+          ...(typeof enabled === 'boolean' ? { enabled } : {})
+        })
+
+        deps.rescheduleTask(updated.id)
+        core.broadcast('tasks:changed')
+
+        const fresh = core.tasks.get(updated.id)!
+        return ok(
+          `"${fresh.name}" now runs ${describeSchedule(fresh.schedule)}${fresh.enabled ? '' : ' (paused)'}.`
+        )
+      }
+    },
+    {
+      name: 'delete_scheduled_task',
+      description:
+        'Remove a scheduled task. Ask first unless the user plainly asked for it gone — this deletes work they set up, and pausing it with update_scheduled_task is usually what they meant.',
+      inputSchema: {
+        type: 'object',
+        properties: { taskId: { type: 'string' } },
+        required: ['taskId']
+      },
+      mutating: true,
+      handler: (args) => {
+        const taskId = str(args, 'taskId')
+        if (!taskId) return fail('taskId is required')
+
+        const task = core.tasks.get(taskId)
+        if (!task) return fail(`no task with id ${taskId}`)
+
+        // The check-in is seeded on launch, so deleting it only brings it back.
+        if (task.kind === 'heartbeat') {
+          core.tasks.setEnabled(taskId, false, null)
+          core.broadcast('tasks:changed')
+          return ok('The hourly check-in cannot be deleted, so it is paused instead.')
+        }
+
+        core.tasks.delete(taskId)
+        core.broadcast('tasks:changed')
+        return ok(`Deleted "${task.name}".`)
       }
     },
     {

@@ -1,4 +1,5 @@
 import type {
+  DeepPartial,
   ActivityEntry,
   BrainEdge,
   BrainNode,
@@ -14,6 +15,7 @@ import { EdgeStore, NodeStore, type SearchHit, type SearchOptions } from './db/n
 import { GraphStore } from './db/graph'
 import { ActivityStore, IntegrationStore, KvStore, SuggestionStore, type ActivityInput } from './db/meta'
 import { ChatStore } from './db/chat'
+import { TaskStore } from './db/tasks'
 import { ToolStore } from './db/tools'
 import { Vault } from './vault/vault'
 import { Indexer } from './vault/indexer'
@@ -69,6 +71,7 @@ export class BrainCore {
   readonly kv: KvStore
   readonly chat: ChatStore
   readonly tools: ToolStore
+  readonly tasks: TaskStore
   readonly vault: Vault
   readonly indexer: Indexer
   readonly watcher: VaultWatcher
@@ -93,6 +96,7 @@ export class BrainCore {
     this.kv = new KvStore(this.db)
     this.chat = new ChatStore(this.db)
     this.tools = new ToolStore(this.db)
+    this.tasks = new TaskStore(this.db)
 
     this.vault = new Vault(paths.vaultDir, paths.trashDir)
     this.indexer = new Indexer(this.db, this.vault, this.nodes, this.edges)
@@ -111,7 +115,7 @@ export class BrainCore {
     return this.settingsStore.get()
   }
 
-  updateSettings(patch: Partial<Settings>): Settings {
+  updateSettings(patch: DeepPartial<Settings>): Settings {
     const next = this.settingsStore.update(patch)
     this.broadcastFn('settings:changed', next)
     return next

@@ -14,7 +14,10 @@ import type {
   IntegrationTool,
   NeighborhoodResult,
   NodeKind,
+  DeepPartial,
   SavedTool,
+  ScheduledTask,
+  TaskRunResult,
   Settings,
   Suggestion,
   WorkspaceInfo
@@ -177,7 +180,7 @@ export interface ApiMap {
   /* system */
   'app:bootstrap': (payload: void) => BootstrapPayload
   'app:settings:get': (payload: void) => Settings
-  'app:settings:update': (payload: Partial<Settings>) => Settings
+  'app:settings:update': (payload: DeepPartial<Settings>) => Settings
   'app:openWorkspace': (payload: void) => void
   'app:chooseWorkspace': (payload: void) => string | null
   'app:reindex': (payload: void) => IndexReportDto
@@ -230,6 +233,24 @@ export interface ApiMap {
   'usage:get': (payload: void) => UsageSnapshotDto
 
   /* saved tools */
+  /* ------------------------------------------------------- scheduled tasks */
+
+  'tasks:list': (payload: void) => ScheduledTask[]
+  'tasks:save': (payload: {
+    id?: string
+    name: string
+    prompt: string
+    schedule: unknown
+    enabled?: boolean
+    capability?: AgentCapability
+  }) => ScheduledTask
+  'tasks:setEnabled': (payload: { id: string; enabled: boolean }) => ScheduledTask | null
+  'tasks:remove': (payload: { id: string }) => void
+  /** Run it now regardless of its schedule. Resolves once the turn has settled. */
+  'tasks:runNow': (payload: { id: string }) => TaskRunResult
+  /** The chat a task writes into, so the Tasks tab can open it. */
+  'tasks:openSession': (payload: { id: string }) => { sessionId: string | null }
+
   'tools:list': (payload: void) => SavedTool[]
   'tools:setPinned': (payload: { id: string; pinned: boolean }) => void
   'tools:remove': (payload: { id: string }) => void
@@ -383,6 +404,12 @@ export const API_CHANNELS: ApiChannel[] = [
   'agent:status',
   'agent:budget',
   'usage:get',
+  'tasks:list',
+  'tasks:save',
+  'tasks:setEnabled',
+  'tasks:remove',
+  'tasks:runNow',
+  'tasks:openSession',
   'tools:list',
   'tools:setPinned',
   'tools:remove',
@@ -433,6 +460,16 @@ export interface EventMap {
   'settings:changed': Settings
   'integrations:changed': void
   'tools:changed': void
+  /** A scheduled task was created, edited, or has just run. */
+  'tasks:changed': void
+  /**
+   * Bring a conversation to the front.
+   *
+   * Sent when a notification is clicked. The chat may be a task's own, which is
+   * archived and therefore not in the recent list — so the renderer has to be told
+   * which one rather than being left to guess from what is newest.
+   */
+  'chat:reveal': { sessionId: string }
   'tools:stateChanged': { toolId: string; rev: number; note: string | null }
   /** A global shortcut fired: open this tool and focus its input. */
   'tools:activate': { toolId: string; focusInput: boolean }
@@ -473,6 +510,8 @@ export const EVENT_CHANNELS: EventChannel[] = [
   'settings:changed',
   'integrations:changed',
   'tools:changed',
+  'tasks:changed',
+  'chat:reveal',
   'tools:stateChanged',
   'tools:activate',
   'tools:focusInput',

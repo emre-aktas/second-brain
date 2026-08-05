@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
+import { Spinner } from '@/components/ui/base'
 
 /**
  * Past conversations.
@@ -16,6 +17,10 @@ export function HistoryPopover(): React.JSX.Element {
   const sessions = useApp((s) => s.sessions)
   const current = useApp((s) => s.session)
   const switchSession = useApp((s) => s.switchSession)
+  // Which conversations are mid-turn. Switching away no longer stops one, so the list
+  // has to say which are still working — otherwise leaving a chat and coming back
+  // looks identical to it having quietly died.
+  const runningSessionIds = useApp((s) => s.runningSessionIds)
   const refreshSessions = useApp((s) => s.refreshSessions)
 
   const [open, setOpen] = useState(false)
@@ -83,9 +88,16 @@ export function HistoryPopover(): React.JSX.Element {
                   }}
                   className="min-w-0 flex-1 px-2 py-1.5 text-left"
                 >
-                  <p className="truncate text-[13px] text-foreground">{session.title}</p>
+                  <p className="flex items-center gap-1.5 text-[13px] text-foreground">
+                    <span className="truncate">{session.title}</span>
+                    {runningSessionIds.includes(session.id) && (
+                      <Spinner className="size-3 shrink-0 text-primary" />
+                    )}
+                  </p>
                   <p className="text-[11px] text-muted-foreground">
-                    {formatRelativeTime(session.updatedAt)}
+                    {runningSessionIds.includes(session.id)
+                      ? 'working…'
+                      : formatRelativeTime(session.updatedAt)}
                   </p>
                 </button>
 

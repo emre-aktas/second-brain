@@ -5,7 +5,7 @@ import { ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toolIcon } from '@/components/panels/ToolsPanel'
 import type { AgentCapability, ChatBlock, ChatImage, ChatMessage } from '@shared/types'
-import { useApp } from '@/store/app'
+import { activeChat, useApp } from '@/store/app'
 import { cn } from '@/lib/utils'
 import { Badge, Separator, Spinner } from '@/components/ui/base'
 import { Button } from '@/components/ui/button'
@@ -31,10 +31,12 @@ const CAPABILITY_HINT: Record<AgentCapability, string> = {
 }
 
 export function ChatPanel(): React.JSX.Element {
-  const messages = useApp((s) => s.messages)
-  const streaming = useApp((s) => s.streaming)
-  const agentState = useApp((s) => s.agentState)
-  const activeStep = useApp((s) => s.activeStep)
+  // Selected per field from the active conversation's slice rather than from the top
+  // level: several chats can be mid-turn, and this panel shows exactly one of them.
+  const messages = useApp((s) => activeChat(s).messages)
+  const streaming = useApp((s) => activeChat(s).streaming)
+  const agentState = useApp((s) => activeChat(s).agentState)
+  const activeStep = useApp((s) => activeChat(s).activeStep)
   const allQuestions = useApp((s) => s.questions)
   const answerQuestion = useApp((s) => s.answerQuestion)
   const showActivity = useApp((s) => s.settings?.chat.showToolActivity ?? false)

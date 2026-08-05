@@ -1,3 +1,5 @@
+import type { Schedule } from './schedule'
+
 /**
  * Domain types shared by the main process, the preload bridge and the renderer.
  * Keep this file free of runtime imports so it can be pulled into any context.
@@ -816,6 +818,95 @@ export interface Settings {
     accent: string
     reduceMotion: boolean
   }
+  /**
+   * Work the app starts on its own.
+   *
+   * One switch over the whole thing, because being checked on by software is not
+   * everyone's idea of help — off means no scheduled task runs at all, including
+   * the user's own, and the Tasks tab says so rather than quietly doing nothing.
+   */
+  proactive: {
+    enabled: boolean
+    /**
+     * The hourly check-in. Separate from `enabled` so the user can keep their own
+     * scheduled tasks while turning off the app's unprompted ones.
+     */
+    heartbeat: boolean
+    /** Nothing runs inside this window; a task that comes due waits for the end. */
+    quietHours: {
+      enabled: boolean
+      startHour: number
+      endHour: number
+    }
+  }
+  notifications: {
+    enabled: boolean
+    /** When a reply lands and no window of this app has focus. */
+    onReply: boolean
+    /** When something the app started on its own has something to say. */
+    onProactive: boolean
+    /** When the agent is blocked on a question. */
+    onQuestion: boolean
+  }
+}
+
+/* --------------------------------------------------------- scheduled tasks */
+
+export type TaskKind = 'task' | 'heartbeat'
+export type TaskStatus = 'ok' | 'error' | 'skipped'
+
+/**
+ * Something the app does on its own clock.
+ *
+ * Two flavours. An ordinary `task` carries a prompt the user (or the agent, on the
+ * user's behalf) wrote — "every hour, scan Slack and compile what is new". The single
+ * `heartbeat` is the app checking in with itself, and is the one that has to earn its
+ * turn: it runs a deterministic pre-check first and spends nothing when nothing has
+ * changed.
+ */
+export interface ScheduledTask {
+  id: string
+  name: string
+  prompt: string
+  kind: TaskKind
+  schedule: Schedule
+  enabled: boolean
+  capability: AgentCapability
+  model: string | null
+  effort: AgentEffort | null
+  /** The task's own chat, created on first run so a run never interrupts the user. */
+  sessionId: string | null
+  createdBy: 'user' | 'agent' | 'system'
+  createdAt: number
+  updatedAt: number
+  nextRunAt: number | null
+  lastRunAt: number | null
+  lastStatus: TaskStatus | null
+  lastSummary: string | null
+  runCount: number
+}
+
+export interface TaskRunResult {
+  taskId: string
+  status: TaskStatus
+  summary: string
+  sessionId: string | null
+}
+
+/**
+ * A patch for a nested settings object.
+ *
+ * `Partial<Settings>` was too narrow to be true: the main process deep-merges a patch
+ * over the current settings, so `{ proactive: { enabled: false } }` has always been
+ * valid — but the type demanded every sibling key, which meant a caller changing one
+ * checkbox had to restate the other four and risk clobbering one.
+ */
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends readonly unknown[]
+    ? T[K]
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K]
 }
 
 export interface WorkspaceInfo {

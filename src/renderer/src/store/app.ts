@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  DeepPartial,
   ActivityEntry,
   AgentCapability,
   AgentEvent,
@@ -24,7 +25,7 @@ import { api, errorMessage, onEvent } from '@/lib/api'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toast } from '@/components/ui/sonner'
 
-export type Panel = 'chat' | 'note' | 'tools' | 'activity' | 'integrations' | 'settings'
+export type Panel = 'chat' | 'note' | 'tools' | 'tasks' | 'activity' | 'integrations' | 'settings'
 
 /** Text streaming in for a message that has not been finalised yet. */
 interface StreamingMessage {
@@ -57,11 +58,24 @@ interface AppState {
 
   session: ChatSession | null
   sessions: ChatSession[]
-  messages: ChatMessage[]
-  streaming: StreamingMessage | null
-  agentState: AgentState
-  /** Friendly label for whatever the agent is doing right now. */
-  activeStep: string | null
+  /**
+   * Every conversation this window knows about, keyed by session id.
+   *
+   * Keyed rather than flat because a turn does not stop when you look away. The main
+   * process keeps one CLI per session and happily runs several at once — it was the
+   * renderer that dropped every event whose session was not the one on screen, so
+   * switching chats looked exactly like cancelling one. Now a background turn keeps
+   * streaming into its own entry and is waiting, finished, when you come back.
+   */
+  chats: Record<string, ChatRuntime>
+  /**
+   * Sessions with a turn in flight.
+   *
+   * Held as an array rather than derived on render so the value is referentially
+   * stable: the history list subscribes to it, and a fresh array on every text delta
+   * of a streaming reply would re-render the whole list.
+   */
+  runningSessionIds: string[]
   capability: AgentCapability
   /** Rendered interfaces by spec id. */
   genui: Record<string, GenUiSpec>
@@ -101,7 +115,67 @@ interface AppState {
 
   applySuggestion: (id: string) => Promise<void>
   dismissSuggestion: (id: string) => Promise<void>
-  updateSettings: (patch: Partial<Settings>) => Promise<void>
+  updateSettings: (patch: DeepPartial<Settings>) => Promise<void>
+}
+
+/**
+ * Update one conversation's slice, creating it if this is the first we have heard of it.
+ *
+ * Every agent event goes through here rather than writing top-level fields, which is
+ * what makes a background turn keep running: the event is filed under its own session
+ * and only the chat on screen reads from the one being displayed.
+ */
+function patchChat(
+  chats: Record<string, ChatRuntime>,
+  sessionId: string,
+  patch: Partial<ChatRuntime> | ((current: ChatRuntime) => Partial<ChatRuntime>)
+): Record<string, ChatRuntime> {
+  const current = chats[sessionId] ?? EMPTY_CHAT
+  const next = typeof patch === 'function' ? patch(current) : patch
+  return { ...chats, [sessionId]: { ...current, ...next } }
+}
+
+/**
+ * The ids of chats with a turn in flight, reusing the previous array when unchanged.
+ *
+ * The identity matters: this is subscribed to by the conversation list, and a new
+ * array on every text delta would re-render it dozens of times a second.
+ */
+function runningIds(chats: Record<string, ChatRuntime>, previous: string[]): string[] {
+  const next = Object.entries(chats)
+    .filter(([, chat]) => chat.agentState !== 'idle')
+    .map(([id]) => id)
+    .sort()
+
+  if (next.length === previous.length && next.every((id, i) => id === previous[i])) return previous
+  return next
+}
+
+/** One conversation's live state. */
+export interface ChatRuntime {
+  messages: ChatMessage[]
+  streaming: StreamingMessage | null
+  agentState: AgentState
+  /** Friendly label for whatever the agent is doing in this chat right now. */
+  activeStep: string | null
+}
+
+/**
+ * Shared so an absent chat selects the same object every time.
+ *
+ * A fresh `{ messages: [] }` per call would be a new reference on every render, and
+ * every component selecting from it would re-render forever.
+ */
+const EMPTY_CHAT: ChatRuntime = {
+  messages: [],
+  streaming: null,
+  agentState: 'idle',
+  activeStep: null
+}
+
+/** The conversation on screen. */
+export function activeChat(state: AppState): ChatRuntime {
+  return (state.session && state.chats[state.session.id]) || EMPTY_CHAT
 }
 
 const PULSE_RETENTION_MS = 1200
@@ -142,10 +216,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   session: null,
   sessions: [],
-  messages: [],
-  streaming: null,
-  agentState: 'idle',
-  activeStep: null,
+  chats: {},
+  runningSessionIds: [],
   capability: 'curate',
   genui: {},
   lastTurnCost: null,
@@ -182,7 +254,9 @@ export const useApp = create<AppState>((set, get) => ({
     ])
 
     const messages = await api.getMessages(bootstrap.session.id)
-    set({ messages })
+    set((current) => ({
+      chats: patchChat(current.chats, bootstrap.session.id, { messages })
+    }))
     await hydrateGenUi(messages, set)
 
     wireEvents(set, get)
@@ -290,7 +364,14 @@ export const useApp = create<AppState>((set, get) => ({
         ? state.graph.nodes.find((n) => n.id === state.selectedNodeId)
         : null
 
-    set({ agentState: 'starting', lastTurnCost: null })
+    set((current) => ({
+      chats: patchChat(current.chats, state.session!.id, { agentState: 'starting' }),
+      runningSessionIds: runningIds(
+        patchChat(current.chats, state.session!.id, { agentState: 'starting' }),
+        current.runningSessionIds
+      ),
+      lastTurnCost: null
+    }))
 
     try {
       await api.send({
@@ -302,7 +383,9 @@ export const useApp = create<AppState>((set, get) => ({
         ...extra
       })
     } catch (err) {
-      set({ agentState: 'error' })
+      set((current) => ({
+        chats: patchChat(current.chats, state.session!.id, { agentState: 'error' })
+      }))
       toast.error('The agent could not start', { description: errorMessage(err) })
     }
   },
@@ -311,21 +394,50 @@ export const useApp = create<AppState>((set, get) => ({
     const session = get().session
     if (!session) return
     void api.interrupt(session.id)
-    set({ agentState: 'idle', streaming: null })
+    // Only this conversation. Anything running elsewhere is someone else's turn.
+    set((current) => {
+      const chats = patchChat(current.chats, session.id, { agentState: 'idle', streaming: null })
+      return { chats, runningSessionIds: runningIds(chats, current.runningSessionIds) }
+    })
   },
 
   async newSession() {
     const session = await api.createSession()
-    set({ session, messages: [], streaming: null, agentState: 'idle', lastTurnCost: null })
+    // The other conversations are left exactly as they are, including any mid-turn.
+    set((current) => ({
+      session,
+      chats: patchChat(current.chats, session.id, EMPTY_CHAT),
+      lastTurnCost: null
+    }))
     await get().refreshSessions()
   },
 
   async switchSession(id) {
     const session = await api.getSession(id)
     if (!session) return
-    const messages = await api.getMessages(id)
+
     const capability = await api.getCapability(id)
-    set({ session, messages, streaming: null, agentState: 'idle', capability })
+    const known = get().chats[id]
+
+    // A chat already in flight keeps everything it has — its messages, its streamed
+    // text so far, and the fact that it is still working. Re-reading it from disk
+    // would replace a live turn with the last saved state and lose the stream.
+    if (known && known.agentState !== 'idle') {
+      set({ session, capability })
+      return
+    }
+
+    const messages = await api.getMessages(id)
+    set((current) => ({
+      session,
+      capability,
+      chats: patchChat(current.chats, id, {
+        messages,
+        streaming: null,
+        agentState: 'idle',
+        activeStep: null
+      })
+    }))
     await hydrateGenUi(messages, set)
   },
 
@@ -444,6 +556,17 @@ function wireEvents(set: Setter, get: () => AppState): void {
     set({ openToolId: toolId })
   })
 
+  onEvent('chat:reveal', ({ sessionId }) => {
+    // A notification was clicked. The chat may be a task's own, which is archived and
+    // therefore absent from the recent list, so the session list is refreshed first —
+    // opening it un-archives it in the main process.
+    void (async () => {
+      await get().switchSession(sessionId)
+      await get().refreshSessions()
+      set({ panel: 'chat', openToolId: null })
+    })()
+  })
+
   onEvent('chat:question', (question) => {
     set((state) => ({ questions: [...state.questions, question] }))
   })
@@ -464,19 +587,31 @@ function wireEvents(set: Setter, get: () => AppState): void {
 
   onEvent('agent:event', (raw) => {
     const event = raw as AgentEvent
-    const state = get()
-    if (!state.session || event.sessionId !== state.session.id) return
+    // Deliberately not filtered by the session on screen. Filtering here is what made
+    // switching chats look like cancelling one: the turn kept running in the main
+    // process while every event about it was thrown away.
+    const id = event.sessionId
+    const isActive = get().session?.id === id
+
+    /** File a change under this event's own conversation. */
+    const patch = (
+      change: Partial<ChatRuntime> | ((current: ChatRuntime) => Partial<ChatRuntime>)
+    ): void =>
+      set((current) => {
+        const chats = patchChat(current.chats, id, change)
+        return { chats, runningSessionIds: runningIds(chats, current.runningSessionIds) }
+      })
 
     switch (event.type) {
       case 'state':
-        set({ agentState: event.state })
+        patch({ agentState: event.state })
         break
 
       case 'delta': {
-        set((current) => {
+        patch((chat) => {
           const streaming: StreamingMessage =
-            current.streaming?.id === event.messageId
-              ? { ...current.streaming }
+            chat.streaming?.id === event.messageId
+              ? { ...chat.streaming }
               : { id: event.messageId, text: '', thinking: '' }
 
           if (event.kind === 'text') streaming.text += event.text
@@ -488,35 +623,34 @@ function wireEvents(set: Setter, get: () => AppState): void {
       }
 
       case 'message': {
-        set((current) => {
-          const existing = current.messages.findIndex((m) => m.id === event.message.id)
+        patch((chat) => {
+          const existing = chat.messages.findIndex((m) => m.id === event.message.id)
           const messages =
             existing >= 0
-              ? current.messages.map((m, i) => (i === existing ? event.message : m))
-              : [...current.messages, event.message]
+              ? chat.messages.map((m, i) => (i === existing ? event.message : m))
+              : [...chat.messages, event.message]
 
           // A finalised message clears the buffer it came from — either the one
           // with its id, or the one it explicitly says it replaced. Without the
           // second case a buffer whose text had already been folded into the saved
           // message kept rendering next to it, showing the same paragraph twice.
           const superseded =
-            current.streaming !== null &&
-            (current.streaming.id === event.message.id ||
-              current.streaming.id === event.supersedes)
+            chat.streaming !== null &&
+            (chat.streaming.id === event.message.id || chat.streaming.id === event.supersedes)
 
-          return { messages, streaming: superseded ? null : current.streaming }
+          return { messages, streaming: superseded ? null : chat.streaming }
         })
         break
       }
 
       case 'tool-start': {
-        set({ activeStep: friendlyToolLabel(event.name) })
+        patch({ activeStep: friendlyToolLabel(event.name) })
         break
       }
 
       case 'tool-end': {
-        set((current) => ({
-          messages: current.messages.map((message) => ({
+        patch((chat) => ({
+          messages: chat.messages.map((message) => ({
             ...message,
             blocks: message.blocks.map((block) =>
               block.type === 'tool' && block.id === event.id
@@ -529,7 +663,10 @@ function wireEvents(set: Setter, get: () => AppState): void {
       }
 
       case 'result': {
-        set({ agentState: 'idle', streaming: null, activeStep: null, lastTurnCost: event.costUsd })
+        patch({ agentState: 'idle', streaming: null, activeStep: null })
+        // Cost is a property of the turn the user is watching, not of every turn in
+        // flight — a background task finishing must not relabel what this one spent.
+        if (isActive) set({ lastTurnCost: event.costUsd })
         void get().refreshSessions()
         // Keep the readouts honest immediately after every turn.
         void get().refreshBudget()
@@ -538,8 +675,11 @@ function wireEvents(set: Setter, get: () => AppState): void {
       }
 
       case 'error': {
-        set({ agentState: 'error', streaming: null })
-        toast.error('The agent hit a problem', { description: event.message })
+        patch({ agentState: 'error', streaming: null })
+        // Only for the chat being looked at. A toast about a scheduled run that
+        // failed at 3am, surfaced over whatever the user is doing now, is noise —
+        // the Tasks tab records it as the task's last outcome instead.
+        if (isActive) toast.error('The agent hit a problem', { description: event.message })
         break
       }
     }

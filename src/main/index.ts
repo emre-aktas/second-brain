@@ -15,6 +15,8 @@ import { Broadcaster } from './broadcast'
 import { appearance, useAppearanceFrom } from './appearance'
 import { registerIpc, unregisterIpc } from './ipc'
 import { createLogger, initLogger, onLogEntry } from './logger'
+import { Scheduler } from './tasks/scheduler'
+import { Notifier } from './notify'
 import { trafficLightPosition } from '@shared/window-chrome'
 
 const log = createLogger('main')
@@ -28,6 +30,8 @@ let usage: UsageTracker | null = null
 let toolWindows: ToolWindowManager | null = null
 let shortcuts: ShortcutManager | null = null
 let previewer: ToolPreviewer | null = null
+let scheduler: Scheduler | null = null
+let notifier: Notifier | null = null
 let broadcaster: Broadcaster | null = null
 let shuttingDown = false
 
@@ -196,6 +200,26 @@ async function bootstrap(): Promise<void> {
     core.broadcast('tools:activate', { toolId: tool.id, focusInput: true })
   })
 
+  scheduler = new Scheduler(core, agent)
+  scheduler.onChanged = () => core?.broadcast('tasks:changed')
+
+  // A task the agent just created or edited needs its next-run time recomputed, or it
+  // keeps the one belonging to the schedule it no longer has.
+  agent.onTaskChanged = (taskId) => scheduler?.reschedule(taskId)
+
+  // Told about replies, proactive runs and questions so it can decide whether the
+  // user needs to hear about them. It brings the app forward itself, because a toast
+  // that raises a window but does not show what it was about is worse than none.
+  notifier = new Notifier(core, agent, (sessionId) => {
+    if (window && !window.isDestroyed()) {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    }
+    if (sessionId) core?.broadcast('chat:reveal', { sessionId })
+  })
+  notifier.start()
+
   registerIpc({
     core,
     agent,
@@ -205,6 +229,7 @@ async function bootstrap(): Promise<void> {
     toolWindows,
     shortcuts,
     previewer,
+    scheduler,
     getWindow: () => window
   })
 
@@ -219,6 +244,9 @@ async function bootstrap(): Promise<void> {
   // sees the shell immediately and the graph fills in.
   core.start()
   curator.start()
+  // After core.start(): the first tick must not land while the index is still being
+  // built, and seeding the check-in writes a row.
+  scheduler.start()
 
   if (!agent.available) {
     log.warn('claude CLI not found; the agent will be unavailable until it is installed')
@@ -236,6 +264,8 @@ function shutdown(): void {
     shortcuts?.unregisterAll()
     toolWindows?.closeAll()
     curator?.stop()
+    scheduler?.stop()
+    notifier?.stop()
     agent?.stop()
     integrations?.stop()
     core?.shutdown()

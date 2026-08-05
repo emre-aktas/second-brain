@@ -34,11 +34,13 @@ const includeCli = args.includes('--all')
 const SUITE = [
   { file: 'src/main/util/slug.test.ts', mode: 'node' },
   { file: 'src/shared/hotkey.test.ts', mode: 'node' },
+  { file: 'src/shared/schedule.test.ts', mode: 'node' },
   { file: 'src/main/vault/markdown.test.ts', mode: 'node' },
   { file: 'src/main/vault/unicode.test.ts', mode: 'node' },
   { file: 'src/main/db/storage.test.ts', mode: 'node' },
   { file: 'src/main/canvas.probe.ts', mode: 'node' },
   { file: 'src/main/expiry.probe.ts', mode: 'node' },
+  { file: 'src/main/tasks.probe.ts', mode: 'node' },
   { file: 'src/main/agent/lifecycle.probe.ts', mode: 'node' },
   { file: 'src/main/agent/bridge.probe.ts', mode: 'node' },
 

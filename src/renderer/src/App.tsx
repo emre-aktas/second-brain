@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
+  CalendarClock,
   FileText,
   MessageSquare,
   Plug,
@@ -11,13 +12,14 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import type { UsageBucketDto } from '@shared/ipc'
-import { useApp, type Panel } from '@/store/app'
+import { activeChat, useApp, type Panel } from '@/store/app'
 import { api, onEvent } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { NotePanel } from '@/components/panels/NotePanel'
 import { ActivityPanel, SettingsPanel } from '@/components/panels/SidePanels'
+import { TasksPanel } from '@/components/panels/TasksPanel'
 import { ToolsPanel } from '@/components/panels/ToolsPanel'
 import { ToolView } from '@/components/tools/ToolView'
 import { CommandPalette } from '@/components/CommandPalette'
@@ -82,7 +84,7 @@ function Shell(): React.JSX.Element {
   const focusRequest = useApp((s) => s.focusRequest)
   const pulses = useApp((s) => s.pulses)
   const suggestions = useApp((s) => s.suggestions)
-  const agentState = useApp((s) => s.agentState)
+  const agentState = useApp((s) => activeChat(s).agentState)
   const agentAuth = useApp((s) => s.bootstrap?.agent.auth ?? null)
   const budget = useApp((s) => s.budget)
   const usage = useApp((s) => s.usage)
@@ -292,6 +294,7 @@ function Shell(): React.JSX.Element {
             {panel === 'chat' && <ChatPanel />}
             {panel === 'note' && <NotePanel />}
             {panel === 'tools' && <ToolsPanel />}
+            {panel === 'tasks' && <TasksPanel />}
             {panel === 'activity' && <ActivityPanel />}
             {panel === 'settings' && <SettingsPanel />}
           </div>
@@ -366,6 +369,7 @@ const PANELS: { id: Panel; label: string; Icon: LucideIcon }[] = [
   { id: 'chat', label: 'Conversation', Icon: MessageSquare },
   { id: 'note', label: 'Note', Icon: FileText },
   { id: 'tools', label: 'Tools', Icon: Wand2 },
+  { id: 'tasks', label: 'Tasks', Icon: CalendarClock },
   { id: 'activity', label: 'Activity', Icon: Activity },
   { id: 'settings', label: 'Settings', Icon: Settings }
 ]

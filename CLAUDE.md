@@ -109,6 +109,35 @@ it) and forwards it as run status `ask`; `brain.answer` is the tool-side path.
 - `build/icon-mac.png` is separate from `build/icon.png` because macOS does not mask
   app icons; the artwork carries its own shape, inset on Apple's 824-in-1024 grid.
 
+**The hourly check-in must earn its turn.** `buildHeartbeat` is a deterministic
+pre-check and the only reason proactivity can default to on: twenty-four model turns a
+day out of the user's subscription, most against an unchanged vault, is exactly the
+casual spend this file forbids. Two rules make it work, and both were bugs first:
+`heartbeat/lastSeenAt` advances **even on a skip** (or the same notes look new every
+hour), and standing conditions are compared against `heartbeat/lastSignature` (or a
+note past its expiry is raised every hour for ever). `changed` is deliberately outside
+that signature — it is already time-filtered, so it is an event and speaks for itself.
+
+**A scheduled run gets its own chat, never the user's.** `Scheduler.sessionFor` creates
+an archived session per task and reuses it, so a digest never lands mid-conversation
+and a task's history reads as a series. `tasks:openSession` un-archives on the way out.
+
+**Catch-up is once, not once per missed interval.** `recordRun` computes the next time
+from *now*, so a day offline collapses to a single run rather than twenty-four. The
+scheduler also runs one task per tick and never two at once — two turns would be two
+CLI processes on one vault, at double the spend, for work nobody is waiting on.
+
+**Chat state is keyed by session id.** `chats` in the store, read through
+`activeChat(state)`. The old flat shape dropped every event whose session was not on
+screen, which made switching conversations indistinguishable from cancelling one. Only
+the active chat gets a cost readout or an error toast — a task failing at 3am must not
+throw a toast over whatever the user is doing now.
+
+**Never notify about something already on screen.** `Notifier.unattended()` checks
+every window, not just the main one. The heartbeat is told to answer exactly "Nothing
+to report." when it has nothing, and the notifier filters that string — without it a
+deliberately quiet feature becomes an hourly interruption.
+
 **Do not use `--tools` when spawning the CLI.** It replaces the whole tool set
 including MCP tools, which severs the agent from the brain. Capability tiers use
 `--disallowedTools`; see `deniedToolsFor` in `src/main/agent/prompt.ts`.

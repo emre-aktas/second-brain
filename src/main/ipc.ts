@@ -12,6 +12,7 @@ import type { ToolWindowManager } from './toolWindows'
 import { StaleToolWriteError } from './db/tools'
 import type { ShortcutManager } from './shortcuts'
 import type { ToolPreviewer } from './toolPreview'
+import type { Scheduler } from './tasks/scheduler'
 import { formatHotkey, normaliseHotkey } from '@shared/hotkey'
 import { interpolate } from '@shared/bindings'
 import { claudeAuthStatus, claudeVersion, resolveClaudeBinary, runClaude } from './agent/claude'
@@ -38,11 +39,12 @@ export interface IpcContext {
   toolWindows: ToolWindowManager
   shortcuts: ShortcutManager
   previewer: ToolPreviewer
+  scheduler: Scheduler
   getWindow: () => BrowserWindow | null
 }
 
 export function registerIpc(ctx: IpcContext): void {
-  const { core, agent, curator, integrations } = ctx
+  const { core, agent, curator, integrations, scheduler } = ctx
 
   /**
    * A tool's own conversation, created on first use.
@@ -177,6 +179,64 @@ export function registerIpc(ctx: IpcContext): void {
     'agent:budget': () => budgetStatus(),
 
     'usage:get': () => ctx.usage.snapshot(),
+
+    /* ---------------------------------------------------- scheduled tasks */
+
+    'tasks:list': () => core.tasks.list(),
+
+    'tasks:save': ({ id, name, prompt, schedule, enabled, capability }) => {
+      const task = core.tasks.save({
+        ...(id ? { id } : {}),
+        name: name.trim() || 'Untitled task',
+        prompt,
+        schedule,
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(capability ? { capability } : {}),
+        createdBy: 'user'
+      })
+      // Saving may have changed when it is next due, so the arming is redone rather
+      // than left to the old next_run_at — a task edited from hourly to daily would
+      // otherwise still fire within the hour.
+      scheduler.reschedule(task.id)
+      core.broadcast('tasks:changed')
+      return core.tasks.get(task.id)!
+    },
+
+    'tasks:setEnabled': ({ id, enabled }) => {
+      const task = core.tasks.get(id)
+      if (!task) return null
+      core.tasks.setEnabled(id, enabled, null)
+      scheduler.reschedule(id)
+      core.broadcast('tasks:changed')
+      return core.tasks.get(id) ?? null
+    },
+
+    'tasks:remove': ({ id }) => {
+      const task = core.tasks.get(id)
+      // The check-in is seeded by the scheduler, so deleting it would only bring it
+      // back on the next launch. Disabling is the honest way to turn it off.
+      if (task?.kind === 'heartbeat') {
+        core.tasks.setEnabled(id, false, null)
+      } else {
+        core.tasks.delete(id)
+      }
+      core.broadcast('tasks:changed')
+    },
+
+    'tasks:runNow': async ({ id }) => {
+      const result = await scheduler.runNow(id)
+      core.broadcast('tasks:changed')
+      return result
+    },
+
+    'tasks:openSession': ({ id }) => {
+      const task = core.tasks.get(id)
+      if (!task?.sessionId) return { sessionId: null }
+      // Un-archived on the way out: the user is opening it deliberately, so it
+      // belongs in the conversation list from now on.
+      core.chat.archiveSession(task.sessionId, false)
+      return { sessionId: task.sessionId }
+    },
 
     /* -------------------------------------------------------- saved tools */
 

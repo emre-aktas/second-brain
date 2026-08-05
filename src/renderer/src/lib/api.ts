@@ -102,6 +102,19 @@ export const api = {
   writeToolState: (id: string, state: Record<string, unknown>, rev: number) =>
     call('tools:writeState', { id, state, rev }),
   askTool: (id: string, text: string) => call('tools:ask', { id, text }),
+  listTasks: () => call('tasks:list'),
+  saveTask: (payload: {
+    id?: string
+    name: string
+    prompt: string
+    schedule: unknown
+    enabled?: boolean
+  }) => call('tasks:save', payload),
+  setTaskEnabled: (id: string, enabled: boolean) => call('tasks:setEnabled', { id, enabled }),
+  removeTask: (id: string) => call('tasks:remove', { id }),
+  runTaskNow: (id: string) => call('tasks:runNow', { id }),
+  openTaskSession: (id: string) => call('tasks:openSession', { id }),
+
   runToolAction: (id: string, actionId: string, inputs: Record<string, string>) =>
     call('tools:runAction', { id, actionId, inputs }),
   setToolHotkey: (id: string, hotkey: string | null) => call('tools:setHotkey', { id, hotkey }),
