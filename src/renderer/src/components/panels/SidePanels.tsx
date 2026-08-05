@@ -730,6 +730,12 @@ export function SettingsPanel(): React.JSX.Element {
                 onChange={(value) => void updateSettings({ graph: { ...settings.graph, charge: -value } })}
               />
             </Row>
+            <Row label="Turn slowly" hint="Drag with the right button, or hold Shift, to orbit it yourself">
+              <Switch
+                checked={settings.graph.rotate}
+                onCheckedChange={(rotate) => void updateSettings({ graph: { ...settings.graph, rotate } })}
+              />
+            </Row>
           </section>
 
           <Separator />

@@ -381,6 +381,19 @@ const MIGRATIONS: Migration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_inbox_unread ON inbox(read_at, created_at DESC);
     `
+  },
+  {
+    version: 15,
+    name: 'node-depth',
+    up: `
+      -- The graph settles in three dimensions now, so a node's layout is x, y and z.
+      --
+      -- Nullable with no backfill, exactly like x and y: a null means "no saved position",
+      -- and the worker seeds one deterministically from the node's id. Writing a zero for
+      -- every existing node would instead assert that the whole vault is on the mid-plane,
+      -- which is a flat graph the simulation then has to be pushed out of.
+      ALTER TABLE nodes ADD COLUMN z REAL;
+    `
   }
 ]
 

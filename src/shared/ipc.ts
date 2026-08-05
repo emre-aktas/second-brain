@@ -197,7 +197,9 @@ export interface ApiMap {
   /* graph and notes */
   'graph:get': (payload: void) => GraphSnapshot
   'graph:stats': (payload: void) => GraphStats
-  'graph:savePositions': (payload: { positions: { id: string; x: number; y: number }[] }) => void
+  'graph:savePositions': (payload: {
+    positions: { id: string; x: number; y: number; z: number }[]
+  }) => void
   'graph:neighborhood': (payload: { id: string; depth?: number }) => NeighborhoodResult
   'node:get': (payload: { id: string }) => BrainNode | null
   'node:edges': (payload: { id: string }) => BrainEdge[]

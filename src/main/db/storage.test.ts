@@ -176,8 +176,15 @@ check('neighborhood includes neighbour', hood.nodes.some((n) => n.id === forceLa
 check('hubs returns notes', graph.hubs(5).length > 0, true)
 
 section('positions persist')
-nodes.setPositions([{ id: kg!.id, x: 12.5, y: -30 }])
-check('position saved', graph.positions().get(kg!.id), { x: 12.5, y: -30 })
+nodes.setPositions([{ id: kg!.id, x: 12.5, y: -30, z: 7.25 }])
+check('position saved', graph.positions().get(kg!.id), { x: 12.5, y: -30, z: 7.25 })
+// A vault laid out before depth existed has a null z, and its saved layout must survive.
+db.run('UPDATE nodes SET z = NULL WHERE id = ?', [kg!.id])
+check('a pre-depth position still loads', graph.positions().get(kg!.id), {
+  x: 12.5,
+  y: -30,
+  z: 0
+})
 
 section('file removal')
 indexer.removeFile('Orphan Note.md')

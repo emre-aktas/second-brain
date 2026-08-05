@@ -62,7 +62,7 @@ const SETTINGS = {
   budget: { mode: 'off', dailyLimitUsd: 1, perTurnLimitUsd: 0.25 },
   curator: { enabled: false, idleMs: 90000, intervalMs: 600000, autoLinkSimilar: false, useAgent: false, similarityThreshold: 0.22 },
   chat: { showToolActivity: true },
-  graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75 },
+  graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75, rotate: false },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 

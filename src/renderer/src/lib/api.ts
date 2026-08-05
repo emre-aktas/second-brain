@@ -34,7 +34,7 @@ export const api = {
   /* graph and notes */
   getGraph: () => call('graph:get'),
   getStats: () => call('graph:stats'),
-  savePositions: (positions: { id: string; x: number; y: number }[]) =>
+  savePositions: (positions: { id: string; x: number; y: number; z: number }[]) =>
     call('graph:savePositions', { positions }),
   getNeighborhood: (id: string, depth?: number) => call('graph:neighborhood', { id, depth }),
   getNode: (id: string) => call('node:get', { id }),

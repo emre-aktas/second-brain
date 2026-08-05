@@ -256,7 +256,8 @@ function Shell(): React.JSX.Element {
             settings={{
               linkDistance: settings?.graph.linkDistance ?? 70,
               charge: settings?.graph.charge ?? -260,
-              labelThreshold: settings?.graph.labelThreshold ?? 0.75
+              labelThreshold: settings?.graph.labelThreshold ?? 0.75,
+              rotate: settings?.graph.rotate ?? true
             }}
             reduceMotion={reduceMotion}
           />

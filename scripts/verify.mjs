@@ -36,6 +36,7 @@ const SUITE = [
   { file: 'src/shared/hotkey.test.ts', mode: 'node' },
   { file: 'src/shared/schedule.test.ts', mode: 'node' },
   { file: 'src/shared/wikilinks.test.ts', mode: 'node' },
+  { file: 'src/shared/graph-3d.test.ts', mode: 'node' },
   { file: 'src/main/vault/markdown.test.ts', mode: 'node' },
   { file: 'src/main/vault/unicode.test.ts', mode: 'node' },
   { file: 'src/main/db/storage.test.ts', mode: 'node' },
@@ -47,6 +48,7 @@ const SUITE = [
   { file: 'src/main/agent/bridge.probe.ts', mode: 'node' },
 
   { file: 'src/main/graphIcons.probe.ts', mode: 'gui' },
+  { file: 'src/main/graph3d.probe.ts', mode: 'gui' },
   { file: 'src/main/canvasRender.probe.ts', mode: 'gui' },
   { file: 'src/main/chatStream.probe.ts', mode: 'gui' },
   { file: 'src/main/codeTool.probe.ts', mode: 'gui' },

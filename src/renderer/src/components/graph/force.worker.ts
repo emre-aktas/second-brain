@@ -9,10 +9,10 @@ import {
   forceSimulation,
   forceX,
   forceY,
-  type Simulation,
-  type SimulationLinkDatum,
-  type SimulationNodeDatum
-} from 'd3-force'
+  forceZ
+} from 'd3-force-3d'
+import type { Simulation, SimulationLinkDatum, SimulationNodeDatum } from 'd3-force'
+import { seedDepth } from '@shared/graph-3d'
 
 /**
  * The graph's physics, off the main thread.
@@ -29,6 +29,10 @@ interface SimNode extends SimulationNodeDatum {
   pinned: boolean
   level: number
   isTag: boolean
+  /** The third dimension, which d3-force itself has no concept of. */
+  z?: number
+  vz?: number
+  fz?: number | null
 }
 
 interface SimLink extends SimulationLinkDatum<SimNode> {
@@ -53,6 +57,8 @@ export interface WorkerNodeInput {
   level: number
   /** Tags orbit their notes rather than sitting among them. */
   isTag: boolean
+  /** Saved depth, so the layout does not re-settle on every launch. */
+  z: number | null
 }
 
 export interface WorkerEdgeInput {
@@ -90,7 +96,7 @@ export type WorkerRequest =
       removeEdges: WorkerEdgeInput[]
     }
   | { type: 'settings'; settings: ForceSettings }
-  | { type: 'drag'; id: string; x: number; y: number }
+  | { type: 'drag'; id: string; x: number; y: number; z: number }
   | { type: 'release'; id: string; pin: boolean }
   | { type: 'reheat'; alpha?: number }
   | { type: 'resize'; width: number; height: number }
@@ -98,8 +104,12 @@ export type WorkerRequest =
 
 export type WorkerResponse =
   | { type: 'ready'; ids: string[] }
-  | { type: 'tick'; positions: Float32Array; alpha: number }
-  | { type: 'settled'; positions: Float32Array }
+  // Named for its stride. Renaming the field along with it was deliberate: the main
+  // thread reads this array by index in several places, and a silent change from two
+  // floats per node to three would have persisted one node's depth as the next one's y —
+  // straight into SQLite, with nothing failing to compile.
+  | { type: 'tick'; positions3: Float32Array; alpha: number }
+  | { type: 'settled'; positions3: Float32Array }
 
 let simulation: Simulation<SimNode, SimLink> | null = null
 let nodes: SimNode[] = []
@@ -114,11 +124,13 @@ let height = 800
 const SETTLE_ALPHA = 0.004
 const FRAME_MS = 16
 
+/** x, y, z per node, in the order of `ids`. */
 function snapshot(): Float32Array {
-  const out = new Float32Array(nodes.length * 2)
+  const out = new Float32Array(nodes.length * 3)
   for (let i = 0; i < nodes.length; i++) {
-    out[i * 2] = nodes[i].x ?? 0
-    out[i * 2 + 1] = nodes[i].y ?? 0
+    out[i * 3] = nodes[i].x ?? 0
+    out[i * 3 + 1] = nodes[i].y ?? 0
+    out[i * 3 + 2] = nodes[i].z ?? 0
   }
   return out
 }
@@ -144,13 +156,13 @@ function runLoop(): void {
 
     // The buffer is transferred rather than copied, so a large graph does not
     // pay a structured-clone cost every frame.
-    post({ type: 'tick', positions, alpha }, [positions.buffer])
+    post({ type: 'tick', positions3: positions, alpha }, [positions.buffer])
 
     if (alpha < SETTLE_ALPHA) {
       // Settled: stop burning CPU. The graph stays still until something
       // meaningful happens, rather than drifting forever in the background.
       const final = snapshot()
-      post({ type: 'settled', positions: final }, [final.buffer])
+      post({ type: 'settled', positions3: final }, [final.buffer])
       stopLoop()
       return
     }
@@ -218,6 +230,12 @@ function build(
     const angle = Math.random() * Math.PI * 2
     const radius = ringRadius(input.level, settings) * (0.85 + Math.random() * 0.3)
 
+    // A saved depth is restored rather than re-derived. Re-seeding it while restoring x
+    // and y exactly would put every node at a different depth than the layout that
+    // produced those coordinates, so the forces would shove it around and the graph would
+    // visibly re-settle on every launch.
+    const z = input.z ?? seedDepth(input.id, depthAmplitudeFor(input))
+
     const node: SimNode = {
       id: input.id,
       degree: input.degree,
@@ -226,8 +244,13 @@ function build(
       isTag: input.isTag,
       x: input.x ?? Math.cos(angle) * radius,
       y: input.y ?? Math.sin(angle) * radius,
+      z,
+      // Pinned in all three, using the resolved depth rather than `input.z`. A vault laid
+      // out before depth existed has pinned nodes with a null z: fixing only x and y there
+      // would leave the depth free, and the node the user deliberately parked would be the
+      // one thing in the graph still drifting.
       ...(input.pinned && input.x !== null && input.y !== null
-        ? { fx: input.x, fy: input.y }
+        ? { fx: input.x, fy: input.y, fz: z }
         : {})
     }
     index.set(node.id, node)
@@ -245,7 +268,11 @@ function build(
     links.push({ source, target, weight: edge.weight })
   }
 
-  simulation = forceSimulation<SimNode, SimLink>(nodes)
+  // The dimension count is a *constructor* argument, not a setter: initializeNodes runs
+  // once during construction and seeds vz only when it already knows there are three
+  // dimensions. Calling numDimensions(3) afterwards re-initialises the forces but never
+  // the nodes, so half the velocities would stay undefined.
+  simulation = forceSimulation<SimNode, SimLink>(nodes, 3)
     .force(
       'link',
       forceLink<SimNode, SimLink>(links)
@@ -287,6 +314,16 @@ function build(
     // off to infinity, which is the usual failure mode of a sparse graph.
     .force('x', forceX(0).strength(0.014))
     .force('y', forceY(0).strength(0.014))
+    // Notes are held in depth exactly as loosely as they are across, so the layout is a
+    // volume rather than a plate. Holding z tighter was the first attempt and it produced
+    // a graph that was three-dimensional in the arithmetic and flat on the screen — the
+    // perspective and the occlusion had almost nothing to work with.
+    //
+    // Tags are the exception, and pulled hard. `forceRadial` in three dimensions measures
+    // r across all three axes and so pushes on z as well: left as loose as the notes, the
+    // tag rim becomes a shell *around* the graph, hiding it from every angle, instead of a
+    // ring the graph sits inside.
+    .force('z', forceZ<SimNode>(0).strength((d) => (d.isTag ? 0.34 : 0.014)))
     .alpha(1)
     .alphaDecay(0.0228)
     .velocityDecay(0.36)
@@ -294,6 +331,17 @@ function build(
 
   post({ type: 'ready', ids })
   runLoop()
+}
+
+/**
+ * How far from the mid-plane a node may be seeded.
+ *
+ * Tags get none: they sit on a rim, and a rim tilted out of the plane reads as a shell in
+ * front of the graph rather than a ring around it. Everything else gets a slab thin enough
+ * that no node hides permanently behind another.
+ */
+function depthAmplitudeFor(input: WorkerNodeInput): number {
+  return input.isTag ? 0 : 260
 }
 
 function radiusFor(degree: number): number {
@@ -342,6 +390,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
         const spread = anchor ? 34 : 200
         const originX = anchor?.x ?? 0
         const originY = anchor?.y ?? 0
+        const originZ = anchor?.z ?? 0
 
         const node: SimNode = {
           id: input.id,
@@ -350,7 +399,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           level: input.level,
           isTag: input.isTag,
           x: input.x ?? originX + Math.cos(angle) * spread,
-          y: input.y ?? originY + Math.sin(angle) * spread
+          y: input.y ?? originY + Math.sin(angle) * spread,
+          // Beside its neighbour in depth as well as across, and by the same margin. A
+          // note the agent creates mid-conversation that arrives at an unrelated depth
+          // appears to come from somewhere else in the graph entirely, which is the
+          // opposite of what a new link is meant to say.
+          z: input.z ?? originZ + seedDepth(input.id, input.isTag ? 0 : spread)
         }
 
         nodes.push(node)
@@ -415,6 +469,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       if (!node || !simulation) return
       node.fx = message.x
       node.fy = message.y
+      // Pinned in depth too, or the forces would pull the node out of the plane the user
+      // is dragging it across and it would slide away from the pointer.
+      node.fz = message.z
       // Keep the simulation warm but not hot: the dragged node should push its
       // neighbours around without the whole graph relaunching.
       simulation.alpha(Math.max(simulation.alpha(), 0.22))
@@ -431,6 +488,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
         node.pinned = false
         delete node.fx
         delete node.fy
+        delete node.fz
       }
       simulation?.alpha(Math.max(simulation.alpha(), 0.14))
       runLoop()

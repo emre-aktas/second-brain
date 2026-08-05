@@ -88,6 +88,8 @@ export interface GraphNodeLite {
   degree: number
   x: number | null
   y: number | null
+  /** Depth. Null until the layout has settled once. */
+  z: number | null
   pinned: boolean
   color: string | null
   updatedAt: number
@@ -834,6 +836,8 @@ export interface Settings {
     linkDistance: number
     charge: number
     labelThreshold: number
+    /** Whether the graph turns on its own. Off leaves the orbit entirely to the user. */
+    rotate: boolean
   }
   appearance: {
     theme: 'dark' | 'light' | 'system'

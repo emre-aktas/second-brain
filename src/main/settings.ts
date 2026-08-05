@@ -38,7 +38,8 @@ export function defaultSettings(workspacePath: string): Settings {
       showSimilarEdges: true,
       linkDistance: 70,
       charge: -260,
-      labelThreshold: 0.75
+      labelThreshold: 0.75,
+      rotate: true
     },
     appearance: {
       theme: 'dark',

@@ -51,9 +51,18 @@ xattr -dr com.apple.quarantine "/Applications/Second Brain.app"
 **The graph is the home screen.** Every note is a circle, every connection a line,
 and nothing needs arranging — it lays itself out. Colour is the family a note belongs
 to and the glyph is its kind, because eight hues is the limit for telling colours
-apart at 17px. It settles and then stays still: this screen is open all day, and
-ambient drift is noise. Movement happens only on meaningful events — a pulse when a
-note changes, a camera tween when something is focused.
+apart at 17px.
+
+The layout is three-dimensional and turns slowly on its own, about two minutes to the
+revolution — hold Shift and drag to orbit it yourself, and the turn picks up from
+wherever you left it. Depth is carried by size, by opacity and by which lines are
+drawn over which, so the near side of the graph is legibly nearer rather than merely
+mathematically nearer. This is the one piece of ambient motion in the app and it is
+there on purpose: a still graph is a diagram, and a graph that drifts is a thing you
+are looking into. It can be switched off in Settings, which also stops the redraw.
+
+Everything else moves only on meaningful events — a pulse when a note changes, a
+camera tween when something is focused.
 
 **Answers arrive as interfaces.** Ask for a comparison and you get a table; ask for a
 breakdown and you get a chart. The agent emits a validated spec and the renderer maps

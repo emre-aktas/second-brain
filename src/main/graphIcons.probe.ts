@@ -143,6 +143,7 @@ function denseSnapshot(): GraphSnapshot {
       degree: 0,
       x: null,
       y: null,
+      z: null,
       pinned: false,
       color: null,
       updatedAt: Date.now()
@@ -155,6 +156,7 @@ function denseSnapshot(): GraphSnapshot {
       degree: 0,
       x: null,
       y: null,
+      z: null,
       pinned: false,
       color: null,
       updatedAt: Date.now()
@@ -213,6 +215,7 @@ function snapshot(): GraphSnapshot {
     degree: 0,
     x: null,
     y: null,
+    z: null,
     pinned: entry.title === 'Second Brain',
     color: null,
     updatedAt: Date.now()
@@ -343,6 +346,7 @@ function checkKindTable(): void {
       degree: 1,
       x: null,
       y: null,
+      z: null,
       pinned: false,
       color: null,
       updatedAt: 0
@@ -370,6 +374,7 @@ function checkLevels(): void {
     degree,
     x: null,
     y: null,
+    z: null,
     pinned: false,
     color: null,
     updatedAt: 0
@@ -626,7 +631,7 @@ const SETTINGS = {
   budget: { mode: 'off', dailyLimitUsd: 1, perTurnLimitUsd: 0.25 },
   curator: { enabled: false, idleMs: 90000, intervalMs: 600000, autoLinkSimilar: false, useAgent: false, similarityThreshold: 0.22 },
   chat: { showToolActivity: false },
-  graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75 },
+  graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75, rotate: false },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 

@@ -341,11 +341,11 @@ export class NodeStore {
     this.db.run('UPDATE nodes SET x = ?, y = ? WHERE id = ?', [x, y, id])
   }
 
-  setPositions(positions: { id: string; x: number; y: number }[]): void {
+  setPositions(positions: { id: string; x: number; y: number; z: number }[]): void {
     if (positions.length === 0) return
     this.db.transaction(() => {
       for (const p of positions) {
-        this.db.run('UPDATE nodes SET x = ?, y = ? WHERE id = ?', [p.x, p.y, p.id])
+        this.db.run('UPDATE nodes SET x = ?, y = ?, z = ? WHERE id = ?', [p.x, p.y, p.z, p.id])
       }
     })
   }

@@ -40,12 +40,13 @@ export class GraphStore {
       tags: string
       x: number | null
       y: number | null
+      z: number | null
       pinned: number
       color: string | null
       updated_at: number
       degree: number
     }>(
-      `SELECT n.id, n.title, n.kind, n.tags, n.x, n.y, n.pinned, n.color, n.updated_at,
+      `SELECT n.id, n.title, n.kind, n.tags, n.x, n.y, n.z, n.pinned, n.color, n.updated_at,
               (SELECT COUNT(*) FROM edges e WHERE e.src = n.id OR e.dst = n.id) AS degree
        FROM nodes n
        ${kindFilter}
@@ -69,6 +70,7 @@ export class GraphStore {
       degree: r.degree,
       x: r.x,
       y: r.y,
+      z: r.z,
       pinned: r.pinned === 1,
       color: r.color,
       updatedAt: r.updated_at
@@ -240,11 +242,14 @@ export class GraphStore {
   }
 
   /** Persisted layout positions, so the graph reopens where the user left it. */
-  positions(): Map<string, { x: number; y: number }> {
-    const rows = this.db.all<{ id: string; x: number; y: number }>(
-      'SELECT id, x, y FROM nodes WHERE x IS NOT NULL AND y IS NOT NULL'
+  positions(): Map<string, { x: number; y: number; z: number }> {
+    // z is not in the WHERE clause on purpose. It arrived in a later migration, so a
+    // vault laid out before it has x and y and a null depth — requiring all three would
+    // silently discard every one of those positions and re-settle the whole graph.
+    const rows = this.db.all<{ id: string; x: number; y: number; z: number | null }>(
+      'SELECT id, x, y, z FROM nodes WHERE x IS NOT NULL AND y IS NOT NULL'
     )
-    return new Map(rows.map((r) => [r.id, { x: r.x, y: r.y }]))
+    return new Map(rows.map((r) => [r.id, { x: r.x, y: r.y, z: r.z ?? 0 }]))
   }
 }
 

@@ -11,6 +11,14 @@ import {
   type Camera
 } from './camera'
 import { radiusForDegree, readGraphTheme, type GraphTheme } from './theme'
+import {
+  clampPitch,
+  depthFade,
+  focalFor,
+  project,
+  RESTING_PITCH,
+  unprojectDelta
+} from '@shared/graph-3d'
 import { iconForNode } from '@shared/node-icons'
 import { computeLevels } from '@shared/graph-levels'
 import { drawNodeIcon, MIN_ICON_RADIUS } from './node-icons'
@@ -37,7 +45,7 @@ export interface GraphCanvasProps {
   onSelect: (id: string | null) => void
   onOpen: (id: string) => void
   onHover?: (id: string | null) => void
-  onPositionsSettled?: (positions: { id: string; x: number; y: number }[]) => void
+  onPositionsSettled?: (positions: { id: string; x: number; y: number; z: number }[]) => void
   focusRequest: FocusRequest | null
   /**
    * Node ids to pulse once. `change` was written; `probe` was read by the agent,
@@ -46,7 +54,7 @@ export interface GraphCanvasProps {
   pulses: { id: string; at: number; kind: 'change' | 'probe' }[]
   /** Right-click menu actions the shell handles (ask, link, reveal, trash…). */
   onNodeAction?: (action: string, node: GraphSnapshot['nodes'][number]) => void
-  settings: ForceSettings & { labelThreshold: number }
+  settings: ForceSettings & { labelThreshold: number; rotate: boolean }
   reduceMotion: boolean
 }
 
@@ -61,6 +69,22 @@ const PULSE_MS = 900
 const MIN_NODE_ALPHA = 0.42
 const MAX_LABELS = 140
 const HUB_LABEL_DEGREE = 8
+
+/**
+ * Radians per second the graph turns on its own.
+ *
+ * A full revolution takes about two minutes. Slow enough that it reads as drift rather
+ * than as animation — the graph is the home screen, and something that visibly spins is
+ * unusable to sit in front of. Fast enough that the parallax is doing the work of saying
+ * "this has depth", which a still perspective projection does not manage on its own.
+ */
+const ROTATE_RATE = 0.052
+
+/** Radians of orbit per pixel dragged. A little under a right angle across 250px. */
+const ORBIT_PER_PIXEL = 0.006
+
+/** Floats per node in the projected cache: view x, view y, perspective k, depth. */
+const VIEW_STRIDE = 4
 
 export function GraphCanvas({
   snapshot,
@@ -79,17 +103,70 @@ export function GraphCanvas({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const workerRef = useRef<Worker | null>(null)
 
-  const positionsRef = useRef<Float32Array>(new Float32Array(0))
+  const posRef = useRef<Float32Array>(new Float32Array(0))
   const idsRef = useRef<string[]>([])
   const indexRef = useRef<Map<string, number>>(new Map())
 
-  const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 0.9 })
+  const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 0.9, yaw: 0, pitch: RESTING_PITCH })
+
+  /**
+   * Where every node landed on screen this frame — view x, view y, perspective, depth.
+   *
+   * Rebuilt once per frame and read by the draw, the hit test and the two framing paths,
+   * because projecting a node is not free and all four want the same answer. Held as a
+   * flat Float32Array rather than objects for the same reason the worker's positions are:
+   * this is the one array in the app that is walked several times per frame.
+   */
+  const viewRef = useRef<Float32Array>(new Float32Array(0))
+  /**
+   * How many entries of `viewRef` are real.
+   *
+   * Not `idsRef.current.length`: ids arrive in the worker's `ready` message and coordinates
+   * in `tick`, so for a frame or two after a snapshot change there are more ids than there
+   * are positions. Reading past the end of the coordinate array yields zeros, which draws
+   * the whole tail of the graph stacked on the origin.
+   */
+  const viewCountRef = useRef(0)
+  /** Half the depth span this frame, for fading the far side. */
+  const halfDepthRef = useRef(0)
+  /** What the orbit turns about: the centre of the graph, not the world's zero. */
+  const pivotRef = useRef({ x: 0, y: 0, z: 0 })
+  const orbitRef = useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null)
+  /**
+   * Whether the window is actually on screen.
+   *
+   * Visibility, not focus. Auto-rotation is a continuous redraw, and running it for a
+   * minimised window is spending a GPU for nobody — but a window the user can see while
+   * they work in another app is not that case, and stopping a *decorative* drift the
+   * moment they click away makes the app look like it has died rather than idled.
+   *
+   * A ref and not state: it is read inside the render loop, and re-rendering the whole
+   * canvas component to deliver it would be the expensive way to say "stop drawing".
+   */
+  const visibleRef = useRef(true)
+  const lastFrameRef = useRef(0)
+  /** Node indices sorted back-to-front, reused between frames. */
+  const orderRef = useRef<Int32Array>(new Int32Array(0))
   const tweenRef = useRef(new CameraTween())
   const viewportRef = useRef({ width: 1, height: 1 })
   const dprRef = useRef(1)
 
   const hoverRef = useRef<string | null>(null)
-  const dragRef = useRef<{ id: string; moved: boolean } | null>(null)
+  /**
+   * A node being dragged, and what it looked like when the drag began.
+   *
+   * The start state is recorded rather than recomputed because the move is applied as a
+   * delta from it. Following the pointer's absolute world position instead would only be
+   * correct with an unrotated camera — under an orbit, the pointer's position on the view
+   * plane and the node's own coordinates are in different frames.
+   */
+  const dragRef = useRef<{
+    id: string
+    moved: boolean
+    origin: { x: number; y: number; z: number }
+    pointer: { x: number; y: number }
+    k: number
+  } | null>(null)
   const panRef = useRef<{ x: number; y: number; camX: number; camY: number } | null>(null)
   const themeRef = useRef<GraphTheme>(readGraphTheme())
   const needsDrawRef = useRef(true)
@@ -142,7 +219,7 @@ export function GraphCanvas({
         return
       }
 
-      positionsRef.current = message.positions
+      posRef.current = message.positions3
       needsDrawRef.current = true
 
       if (message.type === 'settled') {
@@ -154,12 +231,16 @@ export function GraphCanvas({
         }
 
         if (onPositionsSettled) {
-          const out: { id: string; x: number; y: number }[] = []
+          // Stride 3. This is the site that would have silently corrupted the vault: read
+          // at the old stride, node i's depth is persisted as node i+1's y, and it goes
+          // straight to SQLite. Renaming the field is what made it a compile error.
+          const out: { id: string; x: number; y: number; z: number }[] = []
           for (let i = 0; i < idsRef.current.length; i++) {
             out.push({
               id: idsRef.current[i],
-              x: message.positions[i * 2],
-              y: message.positions[i * 2 + 1]
+              x: message.positions3[i * 3],
+              y: message.positions3[i * 3 + 1],
+              z: message.positions3[i * 3 + 2]
             })
           }
           onPositionsSettled(out)
@@ -222,7 +303,7 @@ export function GraphCanvas({
 
     setIsEmpty(snapshot.nodes.length === 0)
     if (snapshot.nodes.length === 0) {
-      positionsRef.current = new Float32Array(0)
+      posRef.current = new Float32Array(0)
       idsRef.current = []
       previousRef.current = null
       needsDrawRef.current = true
@@ -236,7 +317,8 @@ export function GraphCanvas({
       degree: node.degree,
       pinned: node.pinned,
       level: levels.get(node.id) ?? 1,
-      isTag: node.kind === 'tag'
+      isTag: node.kind === 'tag',
+      z: node.z
     })
     const toEdgeInput = (edge: GraphSnapshot['edges'][number]): WorkerEdgeInput => ({
       src: edge.src,
@@ -316,46 +398,155 @@ export function GraphCanvas({
     return () => observer.disconnect()
   }, [])
 
-  /* ---------------------------------------------------------------- camera */
+  /* -------------------------------------------------------- window visibility */
 
-  const fitToContent = useCallback((animate = true) => {
-    const positions = positionsRef.current
-    if (positions.length === 0) return
-
-    const points: { x: number; y: number }[] = []
-    for (let i = 0; i < positions.length; i += 2) {
-      points.push({ x: positions[i], y: positions[i + 1] })
+  useEffect(() => {
+    const onChange = (): void => {
+      const visible = document.visibilityState === 'visible'
+      visibleRef.current = visible
+      if (visible) {
+        // The elapsed clock has to be discarded, not resumed: the gap since the last frame
+        // is however long the window was away, and applied as rotation that is a jump.
+        lastFrameRef.current = 0
+        needsDrawRef.current = true
+      }
     }
 
-    const bounds = boundsOf(points)
-    if (!bounds) return
+    onChange()
+    document.addEventListener('visibilitychange', onChange)
+    return () => document.removeEventListener('visibilitychange', onChange)
+  }, [])
 
-    const target = cameraForBounds(bounds, viewportRef.current)
-    if (animate && !reduceMotion) tweenRef.current.start(cameraRef.current, target)
-    else cameraRef.current = target
-    needsDrawRef.current = true
-  }, [reduceMotion])
+  /* ------------------------------------------------------------ projection */
+
+  /**
+   * Project every node at the current orbit into `viewRef`.
+   *
+   * Also fixes the pivot and the depth span for this frame. Both are measured from the
+   * layout rather than assumed: `forceCenter` keeps the graph near the world origin, but
+   * a user who has dragged and pinned a corner of it has moved the centre, and orbiting
+   * about a point the graph is not actually around looks like the whole thing is swinging
+   * on a rope.
+   */
+  const projectAll = useCallback((): Float32Array => {
+    const positions = posRef.current
+    const ids = idsRef.current
+    const count = Math.min(ids.length, Math.floor(positions.length / 3))
+    viewCountRef.current = count
+
+    let view = viewRef.current
+    if (view.length !== count * VIEW_STRIDE) {
+      view = new Float32Array(count * VIEW_STRIDE)
+      viewRef.current = view
+    }
+    if (count === 0) {
+      halfDepthRef.current = 0
+      return view
+    }
+
+    let minX = Infinity
+    let minY = Infinity
+    let minZ = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let maxZ = -Infinity
+
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 3]
+      const y = positions[i * 3 + 1]
+      const z = positions[i * 3 + 2]
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+      if (z < minZ) minZ = z
+      if (z > maxZ) maxZ = z
+    }
+
+    const pivot = {
+      x: (minX + maxX) / 2,
+      y: (minY + maxY) / 2,
+      z: (minZ + maxZ) / 2
+    }
+    pivotRef.current = pivot
+
+    // Perspective proportional to the graph, so a new vault of twelve notes and a mature
+    // one of two thousand read with the same amount of depth. Measured across all three
+    // axes rather than depth alone: see `focalFor`.
+    const focal = focalFor(
+      Math.max(maxX - minX, maxY - minY, maxZ - minZ) / 2
+    )
+
+    const orbit = cameraRef.current
+    let halfDepth = 0
+
+    for (let i = 0; i < count; i++) {
+      const projected = project(
+        { x: positions[i * 3], y: positions[i * 3 + 1], z: positions[i * 3 + 2] },
+        pivot,
+        orbit,
+        focal
+      )
+      view[i * VIEW_STRIDE] = projected.x
+      view[i * VIEW_STRIDE + 1] = projected.y
+      view[i * VIEW_STRIDE + 2] = projected.k
+      view[i * VIEW_STRIDE + 3] = projected.depth
+      const absolute = Math.abs(projected.depth)
+      if (absolute > halfDepth) halfDepth = absolute
+    }
+
+    halfDepthRef.current = halfDepth
+    return view
+  }, [])
+
+  /* ---------------------------------------------------------------- camera */
+
+  const fitToContent = useCallback(
+    (animate = true) => {
+      // Framed from the *projection*, not the layout: what has to fit on screen is what
+      // the current orbit puts there. Framing the raw coordinates would leave a graph
+      // seen edge-on floating in the middle of an empty viewport.
+      const view = projectAll()
+      const count = viewCountRef.current
+      if (count === 0) return
+
+      const points: { x: number; y: number }[] = []
+      for (let i = 0; i < count; i++) {
+        points.push({ x: view[i * VIEW_STRIDE], y: view[i * VIEW_STRIDE + 1] })
+      }
+
+      const bounds = boundsOf(points)
+      if (!bounds) return
+
+      const target = cameraForBounds(bounds, viewportRef.current, cameraRef.current)
+      if (animate && !reduceMotion) tweenRef.current.start(cameraRef.current, target)
+      else cameraRef.current = target
+      needsDrawRef.current = true
+    },
+    [projectAll, reduceMotion]
+  )
 
   // Focus request from the agent or the UI.
   useEffect(() => {
     if (!focusRequest || focusRequest.ids.length === 0) return
 
-    const positions = positionsRef.current
+    const view = projectAll()
+    const count = viewCountRef.current
     const points: { x: number; y: number }[] = []
     for (const id of focusRequest.ids) {
       const index = indexRef.current.get(id)
-      if (index === undefined) continue
-      points.push({ x: positions[index * 2], y: positions[index * 2 + 1] })
+      if (index === undefined || index >= count) continue
+      points.push({ x: view[index * VIEW_STRIDE], y: view[index * VIEW_STRIDE + 1] })
     }
 
     const bounds = boundsOf(points)
     if (!bounds) return
 
-    const target = cameraForBounds(bounds, viewportRef.current, 140, 1.5)
+    const target = cameraForBounds(bounds, viewportRef.current, cameraRef.current, 140, 1.5)
     if (reduceMotion) cameraRef.current = target
     else tweenRef.current.start(cameraRef.current, target, 520)
     needsDrawRef.current = true
-  }, [focusRequest, reduceMotion])
+  }, [focusRequest, projectAll, reduceMotion])
 
   /* ------------------------------------------------------------- resize */
 
@@ -395,7 +586,11 @@ export function GraphCanvas({
 
   const hitTest = useCallback(
     (sx: number, sy: number): string | null => {
-      const positions = positionsRef.current
+      // The frame's own projection, not a fresh one: the click has to hit what the user
+      // can see, and re-projecting here at a slightly later orbit would put the target a
+      // fraction of a degree away from where it was drawn.
+      const view = viewRef.current
+      const count = viewCountRef.current
       const camera = cameraRef.current
       const viewport = viewportRef.current
       const world = screenToWorld(camera, viewport, sx, sy)
@@ -403,21 +598,25 @@ export function GraphCanvas({
       // Generous in screen space so small nodes stay clickable when zoomed out.
       const slack = 6 / camera.scale
       let best: string | null = null
-      let bestDistance = Infinity
+      let bestDepth = -Infinity
 
-      for (let i = 0; i < idsRef.current.length; i++) {
+      for (let i = 0; i < count; i++) {
         const id = idsRef.current[i]
         const node = nodeById.get(id)
         if (!node) continue
 
-        const dx = positions[i * 2] - world.x
-        const dy = positions[i * 2 + 1] - world.y
+        const k = view[i * VIEW_STRIDE + 2]
+        const dx = view[i * VIEW_STRIDE] - world.x
+        const dy = view[i * VIEW_STRIDE + 1] - world.y
         const distance = Math.sqrt(dx * dx + dy * dy)
-        const radius = radiusForDegree(node.degree) + slack
+        const radius = radiusForDegree(node.degree) * k + slack
 
-        if (distance <= radius && distance < bestDistance) {
+        // Front-most wins, not nearest-centre. Where two nodes overlap, the one on top is
+        // the one the user is pointing at — picking by distance would sometimes hand back
+        // a node hidden behind the one under the cursor.
+        if (distance <= radius && view[i * VIEW_STRIDE + 3] > bestDepth) {
           best = id
-          bestDistance = distance
+          bestDepth = view[i * VIEW_STRIDE + 3]
         }
       }
 
@@ -441,6 +640,37 @@ export function GraphCanvas({
         needsDrawRef.current = true
       }
 
+      // Elapsed rather than per-frame, so the graph turns at the same speed on a 60Hz
+      // panel and a 144Hz one. Clamped because a tab that was in the background hands
+      // back a gap of seconds, and that would arrive as a jump.
+      const elapsed = lastFrameRef.current === 0 ? 0 : Math.min(0.05, (now - lastFrameRef.current) / 1000)
+      lastFrameRef.current = now
+
+      const turning =
+        settings.rotate &&
+        !reduceMotion &&
+        visibleRef.current &&
+        // Anything the user is doing with a pointer owns the view until they let go.
+        !orbitRef.current &&
+        !dragRef.current &&
+        !panRef.current &&
+        !tweenRef.current.active
+
+      if (turning && elapsed > 0) {
+        const camera = cameraRef.current
+        // Slowed as the view zooms in. The rate is angular, so at 3x the same radians per
+        // second sweep three times as much across the screen — held constant, zooming in
+        // to read a cluster turns the graph into something moving too fast to read.
+        const rate = ROTATE_RATE / Math.max(1, camera.scale)
+        cameraRef.current = {
+          ...camera,
+          // Wrapped: this runs for as long as the app is open, and an angle that grows
+          // without bound loses precision in the trig long before the day is out.
+          yaw: (camera.yaw + rate * elapsed) % (Math.PI * 2)
+        }
+        needsDrawRef.current = true
+      }
+
       // `at` can be in the future: a staggered sweep schedules its tail ahead of
       // time, and the loop has to stay awake until the last one has finished.
       const hasLivePulse = !reduceMotion && pulses.some((pulse) => now < pulse.at + PULSE_MS)
@@ -455,7 +685,7 @@ export function GraphCanvas({
       const camera = cameraRef.current
       const viewport = viewportRef.current
       const dpr = dprRef.current
-      const positions = positionsRef.current
+      const positions = posRef.current
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, viewport.width, viewport.height)
@@ -463,6 +693,11 @@ export function GraphCanvas({
       ctx.fillRect(0, 0, viewport.width, viewport.height)
 
       if (positions.length === 0) return
+
+      const view = projectAll()
+      const count = viewCountRef.current
+      const halfDepth = halfDepthRef.current
+      if (count === 0) return
 
       // What the user is currently attending to: hover, selection, or an
       // agent-driven focus. Everything outside it is dimmed rather than hidden,
@@ -482,10 +717,17 @@ export function GraphCanvas({
       const dimming = attention.size > 0
 
       const index = indexRef.current
-      const screenOf = (id: string): { x: number; y: number } | null => {
+      /** Where a node is on screen, with the perspective and depth it was projected at. */
+      const screenOf = (id: string): { x: number; y: number; k: number; depth: number } | null => {
         const i = index.get(id)
-        if (i === undefined) return null
-        return worldToScreen(camera, viewport, positions[i * 2], positions[i * 2 + 1])
+        if (i === undefined || i >= count) return null
+        const point = worldToScreen(camera, viewport, view[i * VIEW_STRIDE], view[i * VIEW_STRIDE + 1])
+        return {
+          x: point.x,
+          y: point.y,
+          k: view[i * VIEW_STRIDE + 2],
+          depth: view[i * VIEW_STRIDE + 3]
+        }
       }
 
       /* --------------------------------------------------------- edges ---- */
@@ -513,7 +755,8 @@ export function GraphCanvas({
        */
       const drawEdgePass = (
         include: (edge: GraphSnapshot['edges'][number], inAttention: boolean) => boolean,
-        style: { color: string; width: number; alpha: number; dash?: number[] }
+        style: { color: string; width: number; alpha: number; dash?: number[] },
+        band?: 'far' | 'near'
       ): void => {
         ctx.beginPath()
         let any = false
@@ -525,6 +768,13 @@ export function GraphCanvas({
           const from = screenOf(edge.src)
           const to = screenOf(edge.dst)
           if (!from || !to) continue
+
+          // A pass is one stroke with one alpha, which is what makes it cheap and also
+          // why depth cannot be per-edge here. Two passes over the same predicate, split
+          // at the mid-plane, buys most of the cue for one extra stroke: without it the
+          // wiring at the back is as loud as the wiring in front and the depth the nodes
+          // are working to convey is contradicted by the lines between them.
+          if (band && (from.depth + to.depth >= 0) !== (band === 'near')) continue
 
           // Cheap offscreen cull: skip when both ends are well outside.
           if (
@@ -568,14 +818,20 @@ export function GraphCanvas({
         if (style.dash) ctx.setLineDash([])
       }
 
-      // Written links, the load-bearing ones.
-      drawEdgePass(
-        (edge, inAttention) =>
-          !isTagEdge(edge) &&
-          edge.kind !== 'similar' &&
-          (dimming ? !inAttention : true),
-        { color: theme.edge, width: 1, alpha: dimming ? 0.1 : 0.34 }
-      )
+      // Written links, the load-bearing ones. Far half first, so the near half draws over
+      // it — the same back-to-front order the nodes are drawn in.
+      for (const band of ['far', 'near'] as const) {
+        drawEdgePass(
+          (edge, inAttention) =>
+            !isTagEdge(edge) && edge.kind !== 'similar' && (dimming ? !inAttention : true),
+          {
+            color: theme.edge,
+            width: band === 'near' ? 1.15 : 0.85,
+            alpha: (dimming ? 0.1 : 0.34) * (band === 'near' ? 1.2 : 0.55)
+          },
+          band
+        )
+      }
 
       // The curator's guesses, dashed so they read as inferred rather than written.
       drawEdgePass(
@@ -629,7 +885,7 @@ export function GraphCanvas({
           if (!point) continue
 
           const node = nodeById.get(pulse.id)
-          const base = radiusForDegree(node?.degree ?? 1) * camera.scale
+          const base = radiusForDegree(node?.degree ?? 1) * camera.scale * point.k
           const t = elapsed / PULSE_MS
           // ease-out so the ring leaves fast and fades, reading as an emission
           // rather than a throb.
@@ -669,15 +925,36 @@ export function GraphCanvas({
 
       /* ----------------------------------------------- nodes ----------- */
 
-      const labelCandidates: { id: string; x: number; y: number; degree: number; radius: number }[] = []
+      const labelCandidates: {
+        id: string
+        x: number
+        y: number
+        degree: number
+        radius: number
+        depth: number
+        fade: number
+      }[] = []
 
-      for (let i = 0; i < idsRef.current.length; i++) {
+      // Back to front, so a node in front of another covers it rather than being covered
+      // by it. The order array is reused across frames: this sorts every node every frame
+      // and allocating it each time would be the graph's largest source of garbage.
+      let order = orderRef.current
+      if (order.length !== count) {
+        order = new Int32Array(count)
+        orderRef.current = order
+      }
+      for (let i = 0; i < count; i++) order[i] = i
+      order.sort((a, b) => view[a * VIEW_STRIDE + 3] - view[b * VIEW_STRIDE + 3])
+
+      for (let pass = 0; pass < count; pass++) {
+        const i = order[pass]
         const id = idsRef.current[i]
         const node = nodeById.get(id)
         if (!node) continue
 
-        const point = worldToScreen(camera, viewport, positions[i * 2], positions[i * 2 + 1])
-        const radius = radiusForDegree(node.degree) * camera.scale
+        const k = view[i * VIEW_STRIDE + 2]
+        const point = worldToScreen(camera, viewport, view[i * VIEW_STRIDE], view[i * VIEW_STRIDE + 1])
+        const radius = radiusForDegree(node.degree) * camera.scale * k
 
         if (
           point.x < -radius - 40 ||
@@ -692,13 +969,20 @@ export function GraphCanvas({
         // Being read counts as attention, so a searched node keeps full opacity
         // even while an unrelated focus is dimming everything else.
         const inAttention = attention.has(id) || lit > 0
+
+        // Depth is dimmed as well as shrunk, because on a dark background parallax on its
+        // own reads as movement rather than as distance. Attention overrides it: a node
+        // the user selected, or one the agent is reading, must not be hard to find just
+        // because the orbit happens to have carried it round the back.
+        const fade =
+          inAttention || id === selectedId
+            ? Math.max(0.85, depthFade(view[i * VIEW_STRIDE + 3], halfDepth))
+            : depthFade(view[i * VIEW_STRIDE + 3], halfDepth)
+
         // With nothing selected, weight by how well tagged it is; with something
         // selected, that reading is replaced by the harder in-or-out dimming.
-        ctx.globalAlpha = dimming
-          ? inAttention
-            ? 1
-            : 0.2
-          : (prominence.get(id) ?? 1)
+        const alpha = (dimming ? (inAttention ? 1 : 0.2) : (prominence.get(id) ?? 1)) * fade
+        ctx.globalAlpha = alpha
 
         const color = theme.kinds[node.kind as NodeKind] ?? theme.kinds.note
 
@@ -730,9 +1014,9 @@ export function GraphCanvas({
             ctx.beginPath()
             ctx.arc(point.x, point.y, radius * 2.4, 0, Math.PI * 2)
             ctx.fillStyle = color
-            ctx.globalAlpha = (dimming && !inAttention ? 0.2 : 1) * 0.1
+            ctx.globalAlpha = alpha * 0.1
             ctx.fill()
-            ctx.globalAlpha = dimming && !inAttention ? 0.2 : 1
+            ctx.globalAlpha = alpha
           }
 
           ctx.beginPath()
@@ -755,9 +1039,9 @@ export function GraphCanvas({
             ctx.arc(point.x, point.y, Math.max(1.6, radius) + 2.5, 0, Math.PI * 2)
             ctx.strokeStyle = theme.label
             ctx.lineWidth = 1
-            ctx.globalAlpha = (dimming && !inAttention ? 0.2 : 1) * 0.5
+            ctx.globalAlpha = alpha * 0.5
             ctx.stroke()
-            ctx.globalAlpha = dimming && !inAttention ? 0.2 : 1
+            ctx.globalAlpha = alpha
           }
         }
 
@@ -779,7 +1063,9 @@ export function GraphCanvas({
             // A node being read outranks a hub for the label budget: the whole
             // point is to be able to read what was found.
             degree: lit > 0 ? node.degree + 1000 : node.degree,
-            radius
+            radius,
+            depth: view[i * VIEW_STRIDE + 3],
+            fade
           })
         }
       }
@@ -789,8 +1075,10 @@ export function GraphCanvas({
       /* ---------------------------------------------- labels ----------- */
 
       // Text is the most expensive thing on the canvas, so the best-connected
-      // nodes win when there are more candidates than the budget allows.
-      labelCandidates.sort((a, b) => b.degree - a.degree)
+      // nodes win when there are more candidates than the budget allows. Depth breaks the
+      // tie: placement is first-come and a collision drops the later label, so without
+      // this a node at the back could silently take the name off one in front of it.
+      labelCandidates.sort((a, b) => b.degree - a.degree || b.depth - a.depth)
       const labels =
         labelCandidates.length > MAX_LABELS ? labelCandidates.slice(0, MAX_LABELS) : labelCandidates
 
@@ -848,12 +1136,12 @@ export function GraphCanvas({
         if (!mustShow && !fits(box)) continue
         placed.push(box)
 
-        // Labels follow their node, or the two read as unrelated.
-        ctx.globalAlpha = dimming
-          ? inAttention
-            ? 1
-            : 0.25
-          : (prominence.get(label.id) ?? 1)
+        // Labels follow their node, or the two read as unrelated — depth included. A far
+        // node drawn small and dim with a full-strength name under it was the single thing
+        // most fighting the depth cue: the text is the loudest mark on the canvas, so at
+        // equal weight the names flattened the graph back out.
+        ctx.globalAlpha =
+          (dimming ? (inAttention ? 1 : 0.25) : (prominence.get(label.id) ?? 1)) * label.fade
         ctx.fillStyle =
           lit > 0 ? theme.halo : inAttention || label.id === selectedId ? theme.label : theme.labelMuted
 
@@ -874,8 +1162,10 @@ export function GraphCanvas({
     focusRequest,
     pulses,
     prominence,
+    projectAll,
     reduceMotion,
-    settings.labelThreshold
+    settings.labelThreshold,
+    settings.rotate
   ])
 
   /* --------------------------------------------------------- interaction */
@@ -887,13 +1177,44 @@ export function GraphCanvas({
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>): void => {
     const point = localPoint(event)
-    const hit = hitTest(point.x, point.y)
 
     canvasRef.current?.setPointerCapture(event.pointerId)
     tweenRef.current.cancel()
 
+    // Shift, or the middle button, takes over the orbit. Both are additive: the left
+    // button on its own still means what it always meant, so nothing a user already knows
+    // how to do changes, and turning it by hand is something they find rather than
+    // something they have to learn before they can pan.
+    if (event.shiftKey || event.button === 1) {
+      orbitRef.current = {
+        x: point.x,
+        y: point.y,
+        yaw: cameraRef.current.yaw,
+        pitch: cameraRef.current.pitch
+      }
+      return
+    }
+
+    const hit = hitTest(point.x, point.y)
+
     if (hit) {
-      dragRef.current = { id: hit, moved: false }
+      const i = indexRef.current.get(hit)
+      const positions = posRef.current
+      const view = viewRef.current
+      const inRange = i !== undefined && i < viewCountRef.current
+      dragRef.current = {
+        id: hit,
+        moved: false,
+        origin: inRange
+          ? {
+              x: positions[i! * 3],
+              y: positions[i! * 3 + 1],
+              z: positions[i! * 3 + 2]
+            }
+          : { x: 0, y: 0, z: 0 },
+        pointer: screenToWorld(cameraRef.current, viewportRef.current, point.x, point.y),
+        k: inRange ? view[i! * 4 + 2] : 1
+      }
     } else {
       panRef.current = {
         x: point.x,
@@ -907,14 +1228,39 @@ export function GraphCanvas({
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>): void => {
     const point = localPoint(event)
 
+    if (orbitRef.current) {
+      const start = orbitRef.current
+      cameraRef.current = {
+        ...cameraRef.current,
+        yaw: start.yaw + (point.x - start.x) * ORBIT_PER_PIXEL,
+        // Inverted, so dragging down tips the top of the graph towards the viewer — the
+        // direction the surface under the cursor appears to move with the pointer.
+        pitch: clampPitch(start.pitch - (point.y - start.y) * ORBIT_PER_PIXEL)
+      }
+      needsDrawRef.current = true
+      return
+    }
+
     if (dragRef.current) {
-      dragRef.current.moved = true
+      const drag = dragRef.current
+      drag.moved = true
+
       const world = screenToWorld(cameraRef.current, viewportRef.current, point.x, point.y)
+      // Divided by the perspective the node was picked up at, because the view-plane delta
+      // the pointer travelled is the world delta *magnified* by it. The constraint that
+      // the node stays at its own depth is what keeps k constant for the whole drag.
+      const delta = unprojectDelta(
+        (world.x - drag.pointer.x) / (drag.k || 1),
+        (world.y - drag.pointer.y) / (drag.k || 1),
+        cameraRef.current
+      )
+
       workerRef.current?.postMessage({
         type: 'drag',
-        id: dragRef.current.id,
-        x: world.x,
-        y: world.y
+        id: drag.id,
+        x: drag.origin.x + delta.x,
+        y: drag.origin.y + delta.y,
+        z: drag.origin.z + delta.z
       } satisfies WorkerRequest)
       return
     }
@@ -943,6 +1289,14 @@ export function GraphCanvas({
 
   const handlePointerUp = (event: React.PointerEvent<HTMLCanvasElement>): void => {
     canvasRef.current?.releasePointerCapture(event.pointerId)
+
+    if (orbitRef.current) {
+      // Left where the user put it, and the slow turn picks up from there. Snapping back
+      // to the resting angle would make orbiting feel like it had been undone.
+      orbitRef.current = null
+      lastFrameRef.current = 0
+      return
+    }
 
     if (dragRef.current) {
       const { id, moved } = dragRef.current

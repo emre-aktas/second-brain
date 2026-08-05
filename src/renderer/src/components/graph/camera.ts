@@ -3,6 +3,17 @@ export interface Camera {
   x: number
   y: number
   scale: number
+  /**
+   * Where the camera is orbiting from.
+   *
+   * On the camera rather than in a ref of its own, and required rather than optional,
+   * because every function in this file constructs a *fresh* Camera — `zoomAt`,
+   * `cameraForBounds`, `CameraTween.sample`. Held separately, each of those would
+   * silently drop the orbit and the graph would snap flat on the next zoom or fit,
+   * with nothing failing to compile. Required fields make the compiler find the sites.
+   */
+  yaw: number
+  pitch: number
 }
 
 export interface Viewport {
@@ -56,6 +67,7 @@ export function zoomAt(
   const after = screenToWorld({ ...camera, scale: nextScale }, viewport, sx, sy)
 
   return {
+    ...camera,
     scale: nextScale,
     x: camera.x + (before.x - after.x),
     y: camera.y + (before.y - after.y)
@@ -87,10 +99,17 @@ export function boundsOf(points: { x: number; y: number }[]): Bounds | null {
   return { minX, minY, maxX, maxY }
 }
 
-/** Camera that frames `bounds` with padding, capped so a single node is not zoomed absurdly. */
+/**
+ * Camera that frames `bounds` with padding, capped so a single node is not zoomed absurdly.
+ *
+ * `orbit` is carried through untouched: framing answers "where do I point and how close",
+ * never "from which angle". A fit that also levelled the camera would undo the user's
+ * orbit every time they pressed the fit button.
+ */
 export function cameraForBounds(
   bounds: Bounds,
   viewport: Viewport,
+  orbit: { yaw: number; pitch: number },
   padding = 96,
   maxScale = 1.6
 ): Camera {
@@ -108,7 +127,9 @@ export function cameraForBounds(
   return {
     x: (bounds.minX + bounds.maxX) / 2,
     y: (bounds.minY + bounds.maxY) / 2,
-    scale
+    scale,
+    yaw: orbit.yaw,
+    pitch: orbit.pitch
   }
 }
 
@@ -153,7 +174,12 @@ export class CameraTween {
       y: this.from.y + (this.to.y - this.from.y) * eased,
       // Interpolate zoom logarithmically, otherwise a large scale change appears
       // to rush at the start and crawl at the end.
-      scale: Math.exp(Math.log(this.from.scale) + (Math.log(this.to.scale) - Math.log(this.from.scale)) * eased)
+      scale: Math.exp(Math.log(this.from.scale) + (Math.log(this.to.scale) - Math.log(this.from.scale)) * eased),
+      // Linear, and shortest-path is deliberately *not* handled: every target this class
+      // is given carries the orbit it started from, so these two are equal in practice
+      // and interpolating them only exists to stop the tween flattening the graph.
+      yaw: this.from.yaw + (this.to.yaw - this.from.yaw) * eased,
+      pitch: this.from.pitch + (this.to.pitch - this.from.pitch) * eased
     }
 
     if (t >= 1) this.cancel()
