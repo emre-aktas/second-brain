@@ -138,6 +138,13 @@ every window, not just the main one. The heartbeat is told to answer exactly "No
 to report." when it has nothing, and the notifier filters that string — without it a
 deliberately quiet feature becomes an hourly interruption.
 
+**`.gitignore` directory patterns must be anchored.** `vault/` and `integrations/`
+were meant for the user's workspace at the repo root; unanchored, they match at every
+depth and swallowed `src/main/vault/` and `src/main/integrations/` — thirteen files
+never committed, with a working tree that looked complete. Nothing local can catch
+that, which is why `npm run verify` now fails if anything under `src/` or `scripts/`
+is excluded. Use a leading slash for anything workspace-shaped.
+
 **Do not use `--tools` when spawning the CLI.** It replaces the whole tool set
 including MCP tools, which severs the agent from the brain. Capability tiers use
 `--disallowedTools`; see `deniedToolsFor` in `src/main/agent/prompt.ts`.

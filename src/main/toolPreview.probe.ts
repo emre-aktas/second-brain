@@ -11,9 +11,12 @@ import { tmpdir } from 'node:os'
 async function main(): Promise<void> {
   await app.whenReady()
 
+  // Small enough to fit a modest display. A CI runner's virtual screen is 1024x768,
+  // and Windows clamps a window that will not fit — which is what made a 1100px
+  // request come back as a 1024px capture and read as a failure.
   const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
+    width: 900,
+    height: 620,
     show: false,
     paintWhenInitiallyHidden: true,
     frame: false,
@@ -41,6 +44,9 @@ async function main(): Promise<void> {
 
   const image = await win.webContents.capturePage()
   const size = image.getSize()
+  // What the window actually became, which is not always what was asked for: a
+  // display too small to hold it clamps it, and so does a minimum size.
+  const [contentWidth] = win.getContentSize()
   const png = image.toPNG()
 
   // A window that never painted comes back fully transparent or fully one colour.
@@ -57,7 +63,10 @@ async function main(): Promise<void> {
     ['window reported a size', size.width > 0 && size.height > 0],
     ['capture produced PNG bytes', png.length > 1000],
     ['image is not a single flat colour', distinct.size > 1],
-    ['size matches the requested viewport', Math.abs(size.width - 1100) < 40]
+    // Against the window's own reported width rather than the requested number. The
+    // claim being tested is that a capture reflects the real window instead of some
+    // fixed fallback — comparing to the literal made that hostage to screen size.
+    ['size matches the window', Math.abs(size.width - contentWidth) < 40]
   ]
 
   let failures = 0
