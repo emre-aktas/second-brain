@@ -108,6 +108,16 @@ const VIEW_STRIDE = 4
 const LIVE_DASH: [number, number] = [5, 11]
 const LIVE_DASH_SPEED = 62
 
+/**
+ * How many nodes may be marked as "being examined" at once.
+ *
+ * A search can return twenty matches, and twenty lit nodes with every edge between them
+ * animating is not an answer to "which one is it looking at" — it is the same "something,
+ * somewhere" the whole-canvas version gave. The ids arrive in rank order, so this keeps the
+ * best matches.
+ */
+const MAX_LIVE_NODES = 6
+
 export function GraphCanvas({
   snapshot,
   selectedId,
@@ -171,12 +181,16 @@ export function GraphCanvas({
   /** Node indices sorted back-to-front, reused between frames. */
   const orderRef = useRef<Int32Array>(new Int32Array(0))
   /**
-   * Nodes this turn has touched — read, written, or focused.
+   * The nodes the agent is looking at *right now*.
    *
-   * Accumulated across the turn rather than taken from the pulses alone, because a pulse
-   * lasts under a second and a turn lasts minutes: keyed on pulses only, the wiring would
-   * light for a moment and then go dead while the agent was still plainly working. Cleared
-   * when the turn ends, so the graph does not stay lit.
+   * Replaced by each new read, not accumulated across the turn. Unioned, it grew until it
+   * touched nearly every edge in the graph and the whole canvas animated — which told the
+   * user that something was happening and nothing about where.
+   *
+   * It does persist between reads rather than expiring with the pulse that set it: a pulse
+   * lasts under a second and reading a note takes several, so an expiring marker would
+   * leave "Reading a note…" on screen with nothing on the graph to say which note. So the
+   * rule is last-read-wins, held until the next read or the end of the turn.
    */
   const liveIdsRef = useRef<Set<string>>(new Set())
   const tweenRef = useRef(new CameraTween())
@@ -473,11 +487,18 @@ export function GraphCanvas({
       return
     }
 
-    const next = liveIdsRef.current
-    const before = next.size
-    for (const pulse of pulses) next.add(pulse.id)
-    for (const id of focusIds) next.add(id)
-    if (next.size !== before) needsDrawRef.current = true
+    // Only when there is a new read to show. An empty `pulses` means the last one has
+    // faded, not that the agent has moved on — so the previous marker stays.
+    const fresh = pulses.length > 0 ? pulses.map((pulse) => pulse.id) : [...focusIds]
+    if (fresh.length === 0) return
+
+    const next = new Set(fresh.slice(0, MAX_LIVE_NODES))
+    const previous = liveIdsRef.current
+    const same = next.size === previous.size && [...next].every((id) => previous.has(id))
+    if (same) return
+
+    liveIdsRef.current = next
+    needsDrawRef.current = true
   }, [agentBusy, pulses, focusIds])
 
   /* ------------------------------------------------------------ projection */
@@ -1063,9 +1084,12 @@ export function GraphCanvas({
         }
 
         const lit = probing.get(id) ?? 0
+        // The node the agent is working on, for as long as it is working on it — this is
+        // what the 900ms pulse could not do on its own.
+        const examining = agentBusy && liveIdsRef.current.has(id)
         // Being read counts as attention, so a searched node keeps full opacity
         // even while an unrelated focus is dimming everything else.
-        const inAttention = attention.has(id) || lit > 0
+        const inAttention = attention.has(id) || lit > 0 || examining
 
         // Depth is dimmed as well as shrunk, because on a dark background parallax on its
         // own reads as movement rather than as distance. Attention overrides it: a node
@@ -1142,6 +1166,20 @@ export function GraphCanvas({
           }
         }
 
+        if (examining) {
+          // A ring that breathes, so it reads as ongoing rather than as a static badge.
+          // The frames are already coming — the wiring animation is keeping the loop
+          // awake — so the sine costs nothing that is not already being spent.
+          const breath = reduceMotion ? 0.7 : 0.55 + 0.25 * Math.sin(now / 380)
+          ctx.beginPath()
+          ctx.arc(point.x, point.y, Math.max(1.6, radius) + 4.5, 0, Math.PI * 2)
+          ctx.strokeStyle = theme.halo
+          ctx.lineWidth = 1.6
+          ctx.globalAlpha = breath
+          ctx.stroke()
+          ctx.globalAlpha = alpha
+        }
+
         if (id === selectedId) {
           ctx.beginPath()
           ctx.arc(point.x, point.y, Math.max(1.6, radius) + 5, 0, Math.PI * 2)
@@ -1159,7 +1197,7 @@ export function GraphCanvas({
             y: point.y,
             // A node being read outranks a hub for the label budget: the whole
             // point is to be able to read what was found.
-            degree: lit > 0 ? node.degree + 1000 : node.degree,
+            degree: lit > 0 || examining ? node.degree + 1000 : node.degree,
             radius,
             depth: view[i * VIEW_STRIDE + 3],
             fade
@@ -1228,8 +1266,11 @@ export function GraphCanvas({
         }
 
         // What is being read, and what is selected, are never dropped — those are
-        // the two cases where the name is the whole point.
-        const mustShow = lit > 0 || label.id === selectedId
+        // the two cases where the name is the whole point. The node under examination is
+        // the same case: an unnamed ring says the agent is busy somewhere, which is the
+        // question rather than the answer.
+        const mustShow =
+          lit > 0 || label.id === selectedId || (agentBusy && liveIdsRef.current.has(label.id))
         if (!mustShow && !fits(box)) continue
         placed.push(box)
 
