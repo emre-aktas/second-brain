@@ -1,0 +1,38 @@
+node_modules/
+out/
+dist/
+
+# TypeScript's incremental build cache — machine-specific, regenerated on demand.
+*.tsbuildinfo
+
+# Build output. The bare `release/` pattern missed the numbered variants left behind
+# when Windows held a lock on `release/win-unpacked` and electron-builder fell back
+# to a fresh directory — nine of them, 3.2GB, one `git add .` from being committed.
+release/
+release-*/
+
+# Scratch bundles from scripts/run-ts.mjs. They live inside node_modules so that
+# externals resolve, but are matched here too in case that ever changes.
+.brain-runts-*/
+
+# Anything the app itself produces. The vault is the user's own notes and the index
+# is derived from it; neither belongs to the project.
+*.log
+vault/
+.brain/
+attachments/
+integrations/
+.trash/
+secrets.enc
+*.db
+*.db-journal
+*.db-wal
+
+# Third-party skills vendored for local development, and the lockfile pinning them.
+# Not ours to republish.
+.agents/
+.claude/skills/
+skills-lock.json
+
+.DS_Store
+Thumbs.db

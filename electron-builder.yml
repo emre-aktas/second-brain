@@ -1,0 +1,93 @@
+appId: studio.acme.secondbrain
+productName: Second Brain
+copyright: Copyright © 2026 Acme Studio
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - out/**
+  - package.json
+  - '!**/.vscode/*'
+  - '!**/{.eslintrc,.editorconfig,.prettierrc}'
+  - '!**/*.map'
+  - '!**/{test,__tests__,tests,powered-test,example,examples}'
+  - '!**/*.{md,markdown}'
+
+# node-sqlite3-wasm resolves its .wasm relative to its own module directory,
+# so it must live outside the asar archive.
+asarUnpack:
+  - '**/node_modules/node-sqlite3-wasm/**'
+
+win:
+  executableName: Second Brain
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+mac:
+  # Its own artwork rather than build/icon.png: macOS does not mask an app icon, so
+  # a full-bleed square reads as oversized beside every other icon in the Dock.
+  # build/icon-mac.png is laid out on Apple's grid (824 body in a 1024 canvas).
+  icon: build/icon-mac.png
+  category: public.app-category.productivity
+  darkModeSupport: true
+
+  # Ad-hoc signed, deliberately.
+  #
+  # There is no Apple Developer certificate for this project, and the choice is not
+  # between "signed" and "unsigned" — it is between ad-hoc signed and not launching.
+  # Apple Silicon refuses to run a wholly unsigned binary at all, so `identity: null`
+  # (which skips codesign entirely) ships a build that dies with "the application is
+  # damaged" no matter what the user does to it. `'-'` is codesign's ad-hoc identity,
+  # which app-builder-lib turns into a real signature with no certificate.
+  identity: '-'
+
+  # Must be off with an ad-hoc signature. It defaults to true, and app-builder-lib
+  # warns that the combination needs the disable-library-validation entitlement or
+  # the app fails to launch — so rather than carry an entitlements file whose only
+  # job is to undo a flag we do not want, the flag is off. It buys nothing without
+  # notarization anyway.
+  hardenedRuntime: false
+  notarize: false
+
+  target:
+    # Both architectures separately rather than one universal binary: universal
+    # bundles two copies of Electron for a 250MB download, and nothing here is
+    # native — node-sqlite3-wasm is WebAssembly, so neither slice needs rebuilding.
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  title: ${productName} ${version}
+  contents:
+    - x: 140
+      y: 190
+      type: file
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Second Brain
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+portable:
+  artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+
+npmRebuild: false

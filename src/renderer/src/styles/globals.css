@@ -1,0 +1,504 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ tokens */
+/* Dark is the primary appearance: the graph canvas is the centre of the app and
+ * glowing nodes need a dark field to read against. Light is a full peer, not an
+ * afterthought. */
+
+:root {
+  --radius: 0.75rem;
+
+  --background: oklch(0.985 0.002 250);
+  --foreground: oklch(0.21 0.01 250);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.01 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.01 250);
+
+  --primary: oklch(0.55 0.19 265);
+  --primary-foreground: oklch(0.99 0.005 265);
+
+  --secondary: oklch(0.96 0.004 250);
+  --secondary-foreground: oklch(0.28 0.012 250);
+
+  --muted: oklch(0.965 0.004 250);
+  --muted-foreground: oklch(0.53 0.012 250);
+
+  --accent: oklch(0.95 0.02 265);
+  --accent-foreground: oklch(0.3 0.05 265);
+
+  --destructive: oklch(0.58 0.21 25);
+  --destructive-foreground: oklch(0.99 0.01 25);
+
+  --success: oklch(0.6 0.15 150);
+  --success-foreground: oklch(0.99 0.01 150);
+  --warning: oklch(0.72 0.16 75);
+  --warning-foreground: oklch(0.22 0.05 75);
+  --info: oklch(0.62 0.15 235);
+  --info-foreground: oklch(0.99 0.01 235);
+
+  --border: oklch(0.91 0.005 250);
+  --input: oklch(0.91 0.005 250);
+  --ring: oklch(0.55 0.19 265);
+
+  /* Chart + graph palette. Even hue spacing keeps adjacent series separable,
+   * and chroma stays inside sRGB so nothing clips on a standard display. */
+  --chart-1: oklch(0.62 0.19 265);
+  --chart-2: oklch(0.66 0.16 195);
+  --chart-3: oklch(0.68 0.16 150);
+  --chart-4: oklch(0.74 0.16 95);
+  --chart-5: oklch(0.68 0.19 45);
+  --chart-6: oklch(0.62 0.21 5);
+  --chart-7: oklch(0.58 0.2 320);
+  --chart-8: oklch(0.6 0.18 290);
+
+  /* Graph canvas surface, tuned separately from --background so the canvas can
+   * sit slightly deeper than the chrome around it. */
+  --graph-bg: oklch(0.975 0.003 250);
+  --graph-grid: oklch(0.91 0.006 250);
+  --graph-edge: oklch(0.72 0.02 250);
+  --graph-edge-strong: oklch(0.55 0.19 265);
+  --graph-label: oklch(0.36 0.012 250);
+  --graph-halo: oklch(0.55 0.19 265);
+
+  --sidebar: oklch(0.975 0.003 250);
+  --sidebar-foreground: oklch(0.21 0.01 250);
+  --sidebar-border: oklch(0.91 0.005 250);
+}
+
+.dark {
+  --background: oklch(0.155 0.01 265);
+  --foreground: oklch(0.93 0.006 265);
+
+  --card: oklch(0.19 0.012 265);
+  --card-foreground: oklch(0.93 0.006 265);
+  --popover: oklch(0.205 0.013 265);
+  --popover-foreground: oklch(0.93 0.006 265);
+
+  --primary: oklch(0.7 0.17 268);
+  --primary-foreground: oklch(0.16 0.02 268);
+
+  --secondary: oklch(0.25 0.014 265);
+  --secondary-foreground: oklch(0.9 0.008 265);
+
+  --muted: oklch(0.235 0.013 265);
+  --muted-foreground: oklch(0.66 0.014 265);
+
+  --accent: oklch(0.28 0.035 268);
+  --accent-foreground: oklch(0.92 0.02 268);
+
+  --destructive: oklch(0.66 0.2 22);
+  --destructive-foreground: oklch(0.16 0.02 22);
+
+  --success: oklch(0.7 0.15 152);
+  --success-foreground: oklch(0.16 0.02 152);
+  --warning: oklch(0.8 0.15 80);
+  --warning-foreground: oklch(0.18 0.03 80);
+  --info: oklch(0.72 0.14 235);
+  --info-foreground: oklch(0.16 0.02 235);
+
+  --border: oklch(0.29 0.014 265);
+  --input: oklch(0.31 0.015 265);
+  --ring: oklch(0.7 0.17 268);
+
+  --chart-1: oklch(0.7 0.17 268);
+  --chart-2: oklch(0.75 0.14 195);
+  --chart-3: oklch(0.76 0.15 152);
+  --chart-4: oklch(0.82 0.15 95);
+  --chart-5: oklch(0.75 0.17 48);
+  --chart-6: oklch(0.7 0.19 12);
+  --chart-7: oklch(0.68 0.18 322);
+  --chart-8: oklch(0.7 0.16 292);
+
+  --graph-bg: oklch(0.135 0.012 265);
+  --graph-grid: oklch(0.22 0.014 265);
+  --graph-edge: oklch(0.42 0.02 265);
+  --graph-edge-strong: oklch(0.72 0.17 268);
+  --graph-label: oklch(0.78 0.012 265);
+  --graph-halo: oklch(0.7 0.17 268);
+
+  --sidebar: oklch(0.175 0.011 265);
+  --sidebar-foreground: oklch(0.93 0.006 265);
+  --sidebar-border: oklch(0.27 0.014 265);
+}
+
+/* ------------------------------------------------------------- theme bridge */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --font-sans:
+    'InterVariable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, monospace;
+
+  /* Motion. The built-in CSS easings are too weak to read as intentional, so
+   * these are stronger custom curves. Durations stay under 300ms for anything
+   * the user triggers; ease-in is never used for UI because delaying the first
+   * frame is exactly what makes an interface feel sluggish. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* --------------------------------------------------- tokens at runtime ---- */
+
+/* Everything above lives in `@theme inline`, which is exactly what it says: the
+ * values are inlined into Tailwind's utilities and are NOT emitted as custom
+ * properties. That is right for the utilities and wrong for everything that reads a
+ * token at runtime — `getComputedStyle(root).getPropertyValue('--radius-md')` came
+ * back empty, so a tool's `var(--ease-out)` resolved to nothing and `brain.theme`
+ * shipped without radii, fonts or easing curves.
+ *
+ * Declaring them here as well costs one line each and no duplication of intent: the
+ * radii all derive from `--radius`, so there is still a single source of truth. */
+:root {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans:
+    'InterVariable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'Cascadia Mono', Menlo, monospace;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* -------------------------------------------------------------------- base */
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    /* The window chrome is custom; never let the whole page rubber-band. */
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv11', 'ss01';
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Nothing in a desktop shell should be text-selectable by default; opt in
+   * explicitly for content surfaces. */
+  body {
+    user-select: none;
+    cursor: default;
+  }
+
+  .selectable,
+  input,
+  textarea,
+  [contenteditable='true'] {
+    user-select: text;
+    cursor: auto;
+  }
+
+  :focus-visible {
+    @apply outline-ring outline-2 outline-offset-2;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 32%, transparent);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--muted-foreground) 26%, transparent);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+    background-clip: content-box;
+  }
+}
+
+/* ------------------------------------------------------------------- prose */
+/* Tailwind's preflight strips list markers and heading weights, so every piece of
+ * agent-authored markdown needs these back explicitly. Spacing is set with
+ * margins between siblings rather than on every element, so the first and last
+ * child sit flush against their container. */
+
+@layer components {
+  .genui-prose {
+    --prose-gap: 0.7em;
+
+    & > * + * {
+      margin-top: var(--prose-gap);
+    }
+
+    & h1,
+    & h2,
+    & h3,
+    & h4,
+    & h5,
+    & h6 {
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+      text-wrap: balance;
+      color: var(--foreground);
+    }
+
+    & h1 {
+      font-size: 1.2em;
+    }
+    & h2 {
+      font-size: 1.1em;
+    }
+    & h3,
+    & h4,
+    & h5,
+    & h6 {
+      font-size: 1em;
+    }
+
+    /* A heading needs more air above it than below, so it groups with the text
+     * it introduces rather than floating between blocks. */
+    & * + h1,
+    & * + h2,
+    & * + h3,
+    & * + h4 {
+      margin-top: 1.4em;
+    }
+
+    & h1 + *,
+    & h2 + *,
+    & h3 + *,
+    & h4 + * {
+      margin-top: 0.4em;
+    }
+
+    & p {
+      line-height: 1.65;
+      text-wrap: pretty;
+    }
+
+    & strong {
+      font-weight: 600;
+      color: var(--foreground);
+    }
+
+    & em {
+      font-style: italic;
+    }
+
+    & a {
+      color: var(--primary);
+      text-decoration: underline;
+      text-decoration-color: color-mix(in oklab, var(--primary) 40%, transparent);
+      text-underline-offset: 2px;
+      transition: text-decoration-color 150ms var(--ease-out);
+    }
+    & a:hover {
+      text-decoration-color: var(--primary);
+    }
+
+    & ul,
+    & ol {
+      padding-left: 1.35em;
+      line-height: 1.6;
+    }
+
+    & ul {
+      list-style-type: disc;
+    }
+    & ul ul {
+      list-style-type: circle;
+    }
+    & ol {
+      list-style-type: decimal;
+      /* Numerals should not shift the text edge as the count grows. */
+      font-variant-numeric: tabular-nums;
+    }
+
+    & li + li {
+      margin-top: 0.3em;
+    }
+
+    & li::marker {
+      color: var(--muted-foreground);
+    }
+
+    /* Nested lists belong to their parent item, not to the list as a whole. */
+    & li > ul,
+    & li > ol {
+      margin-top: 0.3em;
+    }
+
+    & li > p {
+      margin-top: 0;
+    }
+
+    & code {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      padding: 0.12em 0.36em;
+      border-radius: calc(var(--radius) - 6px);
+      background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+      /* Keep an inline code span from breaking the line rhythm. */
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    & pre {
+      overflow-x: auto;
+      padding: 0.7em 0.85em;
+      border-radius: calc(var(--radius) - 2px);
+      border: 1px solid var(--border);
+      background: color-mix(in oklab, var(--muted-foreground) 8%, transparent);
+      line-height: 1.55;
+    }
+
+    & pre code {
+      padding: 0;
+      background: none;
+      font-size: 0.85em;
+    }
+
+    & blockquote {
+      padding-left: 0.8em;
+      border-left: 2px solid color-mix(in oklab, var(--primary) 45%, transparent);
+      color: var(--muted-foreground);
+    }
+
+    & hr {
+      border: 0;
+      border-top: 1px solid var(--border);
+      margin-block: 1.2em;
+    }
+
+    & table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95em;
+      display: block;
+      overflow-x: auto;
+    }
+
+    & th,
+    & td {
+      padding: 0.36em 0.6em;
+      text-align: left;
+      border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+    }
+
+    & th {
+      font-weight: 600;
+      color: var(--muted-foreground);
+      font-size: 0.9em;
+    }
+
+    & td {
+      font-variant-numeric: tabular-nums;
+    }
+
+    & tr:last-child td {
+      border-bottom: 0;
+    }
+
+    & img {
+      max-width: 100%;
+      border-radius: calc(var(--radius) - 2px);
+    }
+
+    & :is(h1, h2, h3, h4, p, li, td, th, blockquote) {
+      overflow-wrap: break-word;
+    }
+  }
+}
+
+@layer utilities {
+  /* Draggable window chrome for the frameless shell. */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
