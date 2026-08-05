@@ -118,6 +118,18 @@ const LIVE_DASH_SPEED = 62
  */
 const MAX_LIVE_NODES = 6
 
+/**
+ * Weight of the *last* node in a ranked focus, as a fraction of the first.
+ *
+ * Not much lower. The floor has to stay clearly above the dimming applied to everything
+ * outside the focus (0.2), or the tail of a result set reads as "not in the answer" rather
+ * than as "in the answer, less so" — which would be a worse lie than treating them equally.
+ */
+const FOCUS_FLOOR = 0.55
+
+/** What a focused node's neighbours inherit. Context, not answer. */
+const FOCUS_NEIGHBOUR = 0.62
+
 export function GraphCanvas({
   snapshot,
   selectedId,
@@ -256,10 +268,11 @@ export function GraphCanvas({
    * with nothing to look at and no camera move to explain it. Filtered, a wholly stale
    * focus is simply nothing.
    */
-  const focusIds = useMemo(
-    () => new Set((focusRequest?.ids ?? []).filter((id) => nodeById.has(id))),
+  const focusRanked = useMemo(
+    () => (focusRequest?.ids ?? []).filter((id) => nodeById.has(id)),
     [focusRequest, nodeById]
   )
+  const focusIds = useMemo(() => new Set(focusRanked), [focusRanked])
 
   /* ---------------------------------------------------------------- worker */
 
@@ -793,18 +806,39 @@ export function GraphCanvas({
       // What the user is currently attending to: hover, selection, or an
       // agent-driven focus. Everything outside it is dimmed rather than hidden,
       // so context stays visible.
-      const attention = new Set<string>()
+      /**
+       * How much of the user's attention each node has, 0 to 1.
+       *
+       * A map rather than a set, because a focus is *ranked*: the agent sends its matches
+       * best-first, and answering "these seven notes" by drawing all seven identically
+       * throws away the one thing it knew that the user did not. The best match is at full
+       * strength and the rest fall away behind it, so the ordering is visible instead of
+       * being something the user has to read out of the chat.
+       */
+      const attention = new Map<string, number>()
+      const raise = (id: string, weight: number): void => {
+        const current = attention.get(id)
+        if (current === undefined || weight > current) attention.set(id, weight)
+      }
+
       const primary = hoverRef.current ?? selectedId
       if (primary) {
-        attention.add(primary)
-        for (const neighbour of adjacency.get(primary) ?? []) attention.add(neighbour)
+        // Hover and selection are not ranked — the user is pointing at one thing.
+        raise(primary, 1)
+        for (const neighbour of adjacency.get(primary) ?? []) raise(neighbour, FOCUS_NEIGHBOUR)
       }
-      for (const id of focusIds) {
-        attention.add(id)
-        if (focusRequest && focusRequest.ids.length <= 12) {
-          for (const neighbour of adjacency.get(id) ?? []) attention.add(neighbour)
+
+      // Linear from 1 down to FOCUS_FLOOR across the ranking. A single result gets the full
+      // weight rather than the floor, which is why the divisor guards against zero.
+      const span = Math.max(1, focusRanked.length - 1)
+      for (const [rank, id] of focusRanked.entries()) {
+        const weight = 1 - (rank / span) * (1 - FOCUS_FLOOR)
+        raise(id, weight)
+        if (focusRanked.length <= 12) {
+          for (const neighbour of adjacency.get(id) ?? []) raise(neighbour, weight * FOCUS_NEIGHBOUR)
         }
       }
+
       const dimming = attention.size > 0
 
       const index = indexRef.current
@@ -1089,7 +1123,8 @@ export function GraphCanvas({
         const examining = agentBusy && liveIdsRef.current.has(id)
         // Being read counts as attention, so a searched node keeps full opacity
         // even while an unrelated focus is dimming everything else.
-        const inAttention = attention.has(id) || lit > 0 || examining
+        const weight = attention.get(id)
+        const inAttention = weight !== undefined || lit > 0 || examining
 
         // Depth is dimmed as well as shrunk, because on a dark background parallax on its
         // own reads as movement rather than as distance. Attention overrides it: a node
@@ -1100,9 +1135,12 @@ export function GraphCanvas({
             ? Math.max(0.85, depthFade(view[i * VIEW_STRIDE + 3], halfDepth))
             : depthFade(view[i * VIEW_STRIDE + 3], halfDepth)
 
-        // With nothing selected, weight by how well tagged it is; with something
-        // selected, that reading is replaced by the harder in-or-out dimming.
-        const alpha = (dimming ? (inAttention ? 1 : 0.2) : (prominence.get(id) ?? 1)) * fade
+        // With nothing selected, weight by how well tagged it is; with something selected,
+        // that reading is replaced by the ranking — full strength for the best match, less
+        // for each one behind it, and a flat 0.2 for everything outside the answer.
+        const focusAlpha =
+          weight !== undefined ? weight : lit > 0 || examining ? 1 : 0.2
+        const alpha = (dimming ? focusAlpha : (prominence.get(id) ?? 1)) * fade
         ctx.globalAlpha = alpha
 
         const color = theme.kinds[node.kind as NodeKind] ?? theme.kinds.note
@@ -1197,7 +1235,14 @@ export function GraphCanvas({
             y: point.y,
             // A node being read outranks a hub for the label budget: the whole
             // point is to be able to read what was found.
-            degree: lit > 0 || examining ? node.degree + 1000 : node.degree,
+            // Rank beats connectivity for the label budget: the point of a ranked answer
+            // is being able to read the best match's name first.
+            degree:
+              lit > 0 || examining
+                ? node.degree + 1000
+                : weight !== undefined
+                  ? node.degree + Math.round(weight * 500)
+                  : node.degree,
             radius,
             depth: view[i * VIEW_STRIDE + 3],
             fade
@@ -1245,7 +1290,8 @@ export function GraphCanvas({
         if (!node) continue
 
         const lit = probing.get(label.id) ?? 0
-        const inAttention = attention.has(label.id) || lit > 0
+        const weight = attention.get(label.id)
+        const inAttention = weight !== undefined || lit > 0
         const isHub = node.degree >= HUB_LABEL_DEGREE
 
         // Hubs are named a size larger: at a glance the graph then has headings
@@ -1279,7 +1325,13 @@ export function GraphCanvas({
         // most fighting the depth cue: the text is the loudest mark on the canvas, so at
         // equal weight the names flattened the graph back out.
         ctx.globalAlpha =
-          (dimming ? (inAttention ? 1 : 0.25) : (prominence.get(label.id) ?? 1)) * label.fade
+          (dimming
+            ? weight !== undefined
+              ? Math.max(0.25, weight)
+              : lit > 0
+                ? 1
+                : 0.25
+            : (prominence.get(label.id) ?? 1)) * label.fade
         ctx.fillStyle =
           lit > 0 ? theme.halo : inAttention || label.id === selectedId ? theme.label : theme.labelMuted
 

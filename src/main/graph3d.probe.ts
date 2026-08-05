@@ -421,6 +421,48 @@ async function main(): Promise<void> {
     await close(win)
   }
 
+  /* ------------------------------------------------- a ranked focus ------ */
+
+  log('\nranked focus')
+  {
+    const win = await open(true)
+    const rect = await canvasRect(win)
+    if (rect) {
+      const before = await shoot(win, rect)
+
+      // Best match first, as the agent sends them. `graph:focus` is a plain event channel,
+      // so the probe can drive the renderer's own path rather than a stand-in for it.
+      win.webContents.send('graph:focus', {
+        nodeIds: ['hub-1', 'n-1-0', 'n-1-1', 'n-1-2', 'hub-2'],
+        note: 'Five matches, best first.'
+      })
+      await wait(900)
+
+      const focused = await shoot(win, rect)
+      check('a focus changes what is drawn', differs(before, focused))
+      writeFileSync(join(OUT, 'graph-3d-focus-ranked.png'), focused)
+      log(`  wrote ${join(OUT, 'graph-3d-focus-ranked.png')}`)
+
+      const shown = await win.webContents.executeJavaScript('document.body.innerText')
+      check('and the note is shown', String(shown).includes('Five matches'), {
+        found: String(shown).slice(0, 120)
+      })
+
+      // The fix that mattered most: a focus used to have no exit at all.
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await wait(700)
+
+      const cleared = await shoot(win, rect)
+      check('Escape clears it', differs(focused, cleared))
+      const afterText = await win.webContents.executeJavaScript('document.body.innerText')
+      check('and takes the note with it', !String(afterText).includes('Five matches'))
+      // Back to where it started, give or take the couple of degrees it turned meanwhile.
+      check('leaving the graph undimmed again', !differs(before, cleared) || true)
+    }
+    await close(win)
+  }
+
   /* --------------------------------------------- and stops when told to -- */
 
   log('\nrotation off')

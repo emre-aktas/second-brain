@@ -6,6 +6,7 @@ import { toolIcon } from '@/components/panels/ToolsPanel'
 import type { AgentCapability, ChatBlock, ChatImage, ChatMessage } from '@shared/types'
 import { activeChat, useApp } from '@/store/app'
 import { cn } from '@/lib/utils'
+import { useReduceMotion } from '@/lib/motion'
 import { Badge, Separator, Spinner } from '@/components/ui/base'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/input'
@@ -62,21 +63,76 @@ export function ChatPanel(): React.JSX.Element {
   const [attachments, setAttachments] = useState<ChatImage[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const reduceMotion = useReduceMotion()
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const pinnedToBottomRef = useRef(true)
+  /** The last turn's element, so a new one can be brought to the top of the view. */
+  const lastTurnRef = useRef<HTMLDivElement | null>(null)
+  const turnCountRef = useRef(0)
+  /**
+   * While a scroll we started is still running, in ms on the performance clock.
+   *
+   * A smooth scroll fires the same `scroll` events a human does, and `handleScroll` reads
+   * those as "the user has scrolled away, stop following" — so without this the act of
+   * scrolling to a new message is what turned off following the answer to it.
+   */
+  const scrollingUntilRef = useRef(0)
   const busy = agentState !== 'idle' && agentState !== 'error'
 
-  // Keep the newest content in view, but stop fighting the user the moment they
-  // scroll up to read something.
+  const turns = groupIntoTurns(messages)
+
+  /**
+   * Bring a new turn's *start* to the top of the view.
+   *
+   * The beginning of the answer is the part worth reading first, and pinning the bottom
+   * meant a long reply arrived already scrolled past its own opening. The browser clamps
+   * this to the end of the content, so a short turn simply lands as high as it can — and
+   * because the anchor is then the furthest the view can scroll, the follow below has
+   * nothing to fight over: it only moves once the answer has grown past the viewport.
+   */
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    const grew = turns.length > turnCountRef.current
+    const previous = turnCountRef.current
+    turnCountRef.current = turns.length
+
+    if (!viewport || !grew) return
+
+    // Opening a conversation is not a new message arriving. Jump to the end of it, the way
+    // any transcript should open.
+    if (previous === 0) {
+      viewport.scrollTop = viewport.scrollHeight
+      pinnedToBottomRef.current = true
+      return
+    }
+
+    const element = lastTurnRef.current
+    if (!element) return
+
+    pinnedToBottomRef.current = true
+    scrollingUntilRef.current = performance.now() + (reduceMotion ? 80 : 620)
+    viewport.scrollTo({
+      // A little headroom, so the first line is not flush against the edge.
+      top: Math.max(0, element.offsetTop - 12),
+      behavior: reduceMotion ? 'auto' : 'smooth'
+    })
+  }, [turns.length, reduceMotion])
+
+  // Follow the answer as it is written, but stop fighting the user the moment they scroll
+  // up to read something.
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || !pinnedToBottomRef.current) return
+    // Not while the anchor above is still travelling: jumping to the bottom mid-flight both
+    // cancels the smooth scroll and undoes it.
+    if (performance.now() < scrollingUntilRef.current) return
     viewport.scrollTop = viewport.scrollHeight
   }, [messages, streaming])
 
   const handleScroll = (): void => {
     const viewport = viewportRef.current
     if (!viewport) return
+    if (performance.now() < scrollingUntilRef.current) return
     const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
     pinnedToBottomRef.current = distance < 80
   }
@@ -141,16 +197,20 @@ export function ChatPanel(): React.JSX.Element {
         <div className="flex flex-col gap-5 px-3 py-4">
           {messages.length === 0 && !streaming && <ChatIntro available={agentAvailable} />}
 
-          {groupIntoTurns(messages).map((turn, index) => (
-            <TurnView
+          {turns.map((turn, index) => (
+            <div
               key={turn.userMessage?.id ?? turn.assistantMessages[0]?.id ?? index}
-              turn={turn}
-              genui={genui}
-              nodes={nodes}
-              showActivity={showActivity}
-              onOpenNode={openNode}
-              onFocusNodes={focusNodes}
-            />
+              ref={index === turns.length - 1 ? lastTurnRef : undefined}
+            >
+              <TurnView
+                turn={turn}
+                genui={genui}
+                nodes={nodes}
+                showActivity={showActivity}
+                onOpenNode={openNode}
+                onFocusNodes={focusNodes}
+              />
+            </div>
           ))}
 
           {streaming && (streaming.text || streaming.thinking) && (

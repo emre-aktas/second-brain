@@ -15,6 +15,7 @@ import {
 import type { UsageBucketDto } from '@shared/ipc'
 import { activeChat, useApp, type Panel } from '@/store/app'
 import { api, onEvent } from '@/lib/api'
+import { useReduceMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { ChatPanel } from '@/components/chat/ChatPanel'
@@ -111,11 +112,7 @@ function Shell(): React.JSX.Element {
   const [panelWidth, setPanelWidth] = useState(430)
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
 
-  const systemReducedMotion = useMemo(
-    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    []
-  )
-  const reduceMotion = (settings?.appearance.reduceMotion ?? false) || systemReducedMotion
+  const reduceMotion = useReduceMotion()
 
   // Idle detection for the curator lives in the main process, so the renderer
   // just reports that a human is present. Throttled to once every 20s.
