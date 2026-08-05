@@ -228,15 +228,22 @@ export class Scheduler {
 
     if (task.kind === 'heartbeat') {
       // Which external sources are due, and only ones the account actually has. Read
-      // before the turn because it can take seconds against a couple of dozen servers,
-      // and a manual run is not granted a free sweep — pressing the button would
-      // otherwise consume the next scheduled one.
-      const connected = manual ? [] : await this.sweepable()
+      // before the turn because it can take seconds against a couple of dozen servers.
+      //
+      // A manual run gets exactly the same inputs as a scheduled one, sweep included —
+      // but only if a sweep is *due*, which `sweepable` already decides from the
+      // interval. That is the honest middle: pressing the button five times must not
+      // buy five sweeps, and it must not silently do less than the schedule does either.
+      const connected = await this.sweepable()
 
-      brief = buildHeartbeat(this.core, connected)
+      // `manual` forces a prompt. The gate below is a spend decision about the schedule,
+      // not an answer to a user who pressed the button: a quiet vault is something to
+      // *tell* them, and forcing it is what stops the brief coming back empty.
+      brief = buildHeartbeat(this.core, connected, manual)
+
       // The whole reason the default is on. An hour in which nothing changed asks the
       // model nothing and costs nothing.
-      if (!brief.worthAsking && !manual) {
+      if (!brief.worthAsking) {
         // Committed on a skip too, or the same unchanged notes look new every hour.
         brief.commit()
         return finish('skipped', brief.reason, null)
@@ -245,6 +252,13 @@ export class Scheduler {
     }
 
     if (!prompt.trim()) {
+      // A heartbeat reaching here means the brief came back empty despite being forced,
+      // which is a bug rather than a misconfiguration — so it is reported as a skip with
+      // the brief's own reason. For a task the user wrote, an empty prompt really is a
+      // configuration error and saying so is the useful thing.
+      if (task.kind === 'heartbeat') {
+        return finish('skipped', brief?.reason ?? 'Nothing to check.', null)
+      }
       return finish('error', 'This task has no prompt, so there is nothing to run.', null)
     }
 

@@ -236,6 +236,32 @@ const quiet = checkIn()
 check('the same finding is not raised twice', quiet.worthAsking === false, quiet.reason)
 check('and it says so, rather than claiming nothing changed', quiet.reason.includes('new'), quiet.reason)
 
+/**
+ * Pressing "run now" on a quiet vault.
+ *
+ * The gates above are a spend decision about the *schedule*. They are not an answer to
+ * somebody who deliberately pressed the button — and left applying to a manual run, the
+ * brief came back with an empty prompt, the scheduler's own "this task has no prompt"
+ * guard caught it, and the check-in showed up in the Scheduled tab as **failed**. That is
+ * exactly what the user saw.
+ */
+const forced = buildHeartbeat(fakeCore, [], true)
+check('a forced check-in is always worth asking', forced.worthAsking === true, forced.reason)
+check('and it has a prompt to send', forced.prompt.trim().length > 0)
+check(
+  'which still tells the model it may answer with nothing',
+  forced.prompt.includes('Nothing to report'),
+  forced.prompt.slice(-160)
+)
+check(
+  'and its reason is a sentence, not a stray fragment',
+  forced.reason.length > 0 && !forced.reason.startsWith('swept ') && forced.reason !== 'swept ',
+  forced.reason
+)
+// Forcing must not be sticky: the next scheduled check-in is judged on its merits again.
+forced.commit()
+check('the next unforced check-in still declines', buildHeartbeat(fakeCore).worthAsking === false)
+
 const sabit = nodes.upsert({
   kind: 'log',
   title: 'Sabit',

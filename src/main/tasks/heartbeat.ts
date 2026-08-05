@@ -59,7 +59,20 @@ export interface HeartbeatBrief {
  * actually happened? Only when the answer is yes does a turn get spent, and the brief
  * it produces already contains what changed, so the model does not have to go looking.
  */
-export function buildHeartbeat(core: BrainCore, sweepSources: string[] = []): HeartbeatBrief {
+export function buildHeartbeat(
+  core: BrainCore,
+  sweepSources: string[] = [],
+  /**
+   * Build a prompt even when the pre-check finds nothing.
+   *
+   * Set when the user pressed "run now". The gates below exist to stop the *schedule*
+   * spending a turn on an unchanged vault; they are not an answer to somebody who has
+   * deliberately asked. Without this the brief came back with an empty prompt and the
+   * scheduler reported the run as failed — which is what pressing the button on a quiet
+   * vault did.
+   */
+  force = false
+): HeartbeatBrief {
   const now = Date.now()
   const lastSeen = core.kv.get<number>(LAST_SEEN_KEY) ?? 0
 
@@ -136,7 +149,7 @@ export function buildHeartbeat(core: BrainCore, sweepSources: string[] = []): He
     if (sweepSources.length > 0) core.kv.set(LAST_SWEPT_KEY, now)
   }
 
-  if (signals.length === 0 && sweepSources.length === 0) {
+  if (!force && signals.length === 0 && sweepSources.length === 0) {
     return {
       worthAsking: false,
       reason: 'Nothing changed since the last check-in.',
@@ -152,7 +165,7 @@ export function buildHeartbeat(core: BrainCore, sweepSources: string[] = []): He
   // connector sweep is due. Without the second, a note past its expiry would be raised
   // every hour for ever; without the first, an edit would be missed whenever nothing else
   // had moved; without the third, a quiet vault would mean Slack is never looked at.
-  if (changed.length === 0 && standing === previous && sweepSources.length === 0) {
+  if (!force && changed.length === 0 && standing === previous && sweepSources.length === 0) {
     return {
       worthAsking: false,
       reason: 'Nothing new since the last check-in.',
@@ -221,10 +234,15 @@ export function buildHeartbeat(core: BrainCore, sweepSources: string[] = []): He
     'failure, and it is the right answer most of the time.'
   ].join('\n')
 
+  const parts = [
+    ...signals,
+    ...(sweepSources.length > 0 ? [`swept ${sweepSources.join(', ')}`] : [])
+  ]
+  // A forced run can legitimately reach here with nothing to say for itself. Falling
+  // through to the old `swept ${...}` branch produced the summary "swept " — a stray
+  // fragment shown in the panel as the reason the run happened.
   const reason =
-    signals.length > 0
-      ? [...signals, ...(sweepSources.length > 0 ? [`swept ${sweepSources.join(', ')}`] : [])].join(', ')
-      : `swept ${sweepSources.join(', ')}`
+    parts.length > 0 ? parts.join(', ') : 'Nothing had changed; checked because you asked.'
 
   return { worthAsking: true, reason, prompt, swept: sweepSources, commit }
 }
