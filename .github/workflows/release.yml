@@ -1,0 +1,97 @@
+name: Release
+
+# Tag a version to publish installers:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The macOS artifacts have to be built on a macOS runner — the .icns is generated
+# there and codesign only exists there — which is the reason this workflow exists at
+# all rather than someone building releases from one machine.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win
+          - os: macos-latest
+            args: --mac
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - name: Build and package
+        run: npx electron-vite build && npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          # There is no Apple Developer certificate for this project, so the mac
+          # build is ad-hoc signed (see electron-builder.yml). Telling
+          # electron-builder not to look for one keeps it from failing the job while
+          # searching the keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: true
+          # Drafted rather than published: the macOS build is unsigned, so the
+          # release notes need the Gatekeeper instructions attached before anyone
+          # downloads it and concludes the app is broken.
+          body: |
+            ## Install
+
+            **Windows** — download the `Setup` installer and run it.
+
+            **macOS** — download the `.dmg` for your chip (`arm64` for Apple
+            Silicon, `x64` for Intel) and drag the app to Applications.
+
+            This build is not notarized by Apple, so the first launch is blocked.
+            Right-click the app and choose **Open**, then confirm — once only. If
+            macOS still refuses, clear the quarantine flag:
+
+            ```
+            xattr -dr com.apple.quarantine "/Applications/Second Brain.app"
+            ```
+
+            ## Before it will do anything
+
+            Second Brain drives your own Claude subscription through the `claude`
+            CLI. Install it and sign in first: https://claude.com/claude-code

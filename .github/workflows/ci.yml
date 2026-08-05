@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    # Both platforms, because the whole point of this matrix is the differences:
+    # window chrome, filename normalisation, and the Electron binary's own name are
+    # all things that pass on one and not the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      # The GUI probes open real BrowserWindows and capture them, which needs a
+      # desktop session. Both of these runners have one; a Linux runner would need
+      # xvfb, which is why Linux is not in the matrix.
+      #
+      # The probes that drive the actual claude CLI are excluded by default — CI has
+      # no Claude subscription to sign in with — and agent.probe.ts is never run
+      # anywhere automatically because it makes a real model call.
+      - run: npm run verify
