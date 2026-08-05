@@ -260,6 +260,13 @@ export const useApp = create<AppState>((set, get) => ({
     await hydrateGenUi(messages, set)
 
     wireEvents(set, get)
+
+    // A notification clicked while the app was closed. Done after wireEvents so the
+    // chat is already listening for the turn's events by the time it opens.
+    if (bootstrap.pendingReveal) {
+      await get().switchSession(bootstrap.pendingReveal)
+      set({ panel: 'chat', openToolId: null })
+    }
   },
 
   async refreshGraph() {

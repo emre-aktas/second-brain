@@ -3,7 +3,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { NODE_LINK_PREFIX, remarkWikiLinks, wikiLinkTarget } from '@/lib/wikilinks'
+import { NODE_LINK_PREFIX, remarkWikiLinks, wikiLinkTarget } from '@shared/wikilinks'
 
 const PLUGINS = [remarkGfm, remarkWikiLinks]
 

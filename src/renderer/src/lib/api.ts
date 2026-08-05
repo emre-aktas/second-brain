@@ -103,6 +103,9 @@ export const api = {
     call('tools:writeState', { id, state, rev }),
   askTool: (id: string, text: string) => call('tools:ask', { id, text }),
   listTasks: () => call('tasks:list'),
+  taskRuns: (id: string, limit?: number) => call('tasks:runs', { id, limit }),
+  listInbox: () => call('inbox:list'),
+  readInbox: (id?: string) => call('inbox:read', { id }),
   saveTask: (payload: {
     id?: string
     name: string

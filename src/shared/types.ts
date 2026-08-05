@@ -918,6 +918,27 @@ export interface TaskRun {
   finishedAt: number | null
 }
 
+export type InboxKind = 'reply' | 'task' | 'question'
+
+/**
+ * One thing the app wanted to tell the user while they were away.
+ *
+ * Exists because a desktop notification is not a reliable channel — on Windows the click
+ * is delivered through a COM registration that a dev run or a portable build may not
+ * have — so the toast is an accelerator and this list is the door that always works.
+ */
+export interface InboxEntry {
+  id: string
+  /** The chat to open, or null once that chat has been retired. */
+  sessionId: string | null
+  taskId: string | null
+  kind: InboxKind
+  title: string
+  body: string
+  createdAt: number
+  readAt: number | null
+}
+
 export interface TaskRunResult {
   taskId: string
   status: TaskStatus

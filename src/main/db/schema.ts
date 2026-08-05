@@ -350,6 +350,37 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_task_runs_task
         ON task_runs(task_id, started_at DESC);
     `
+  },
+  {
+    version: 14,
+    name: 'inbox',
+    up: `
+      -- Everything the app decided was worth telling the user about while they were
+      -- away, whether or not the operating system managed to deliver it.
+      --
+      -- This exists because a desktop notification is not a reliable channel. On Windows
+      -- a toast is activated through a COM class registered against the app's identity,
+      -- and if no Start Menu shortcut carrying that identity points at the running
+      -- executable — which is the normal state for a dev run, and unfixable for a
+      -- portable build whose exe lives in a temp directory that is deleted on exit —
+      -- the click dies in the shell and the app never hears about it. So the click is an
+      -- accelerator, and this list is the door that always works.
+      CREATE TABLE IF NOT EXISTS inbox (
+        id          TEXT PRIMARY KEY,
+        -- The chat to open. No foreign key: a run's chat can be retired while the record
+        -- of what it said is still worth keeping.
+        session_id  TEXT,
+        task_id     TEXT,
+        -- 'reply' | 'task' | 'question'
+        kind        TEXT NOT NULL,
+        title       TEXT NOT NULL,
+        body        TEXT NOT NULL DEFAULT '',
+        created_at  INTEGER NOT NULL,
+        read_at     INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_inbox_unread ON inbox(read_at, created_at DESC);
+    `
   }
 ]
 

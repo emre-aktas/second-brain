@@ -10,7 +10,7 @@
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { toMarkdown } from 'mdast-util-to-markdown'
 import type { Root } from 'mdast'
-import { remarkWikiLinks, wikiLinkTarget, NODE_LINK_PREFIX } from '../renderer/src/lib/wikilinks'
+import { remarkWikiLinks, wikiLinkTarget, NODE_LINK_PREFIX } from './wikilinks'
 
 let failures = 0
 

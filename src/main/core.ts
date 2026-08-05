@@ -16,6 +16,7 @@ import { GraphStore } from './db/graph'
 import { ActivityStore, IntegrationStore, KvStore, SuggestionStore, type ActivityInput } from './db/meta'
 import { ChatStore } from './db/chat'
 import { TaskRunStore, TaskStore } from './db/tasks'
+import { InboxStore } from './db/inbox'
 import { ToolStore } from './db/tools'
 import { Vault } from './vault/vault'
 import { Indexer } from './vault/indexer'
@@ -73,6 +74,7 @@ export class BrainCore {
   readonly tools: ToolStore
   readonly tasks: TaskStore
   readonly taskRuns: TaskRunStore
+  readonly inbox: InboxStore
   readonly vault: Vault
   readonly indexer: Indexer
   readonly watcher: VaultWatcher
@@ -99,6 +101,7 @@ export class BrainCore {
     this.tools = new ToolStore(this.db)
     this.tasks = new TaskStore(this.db)
     this.taskRuns = new TaskRunStore(this.db)
+    this.inbox = new InboxStore(this.db)
 
     this.vault = new Vault(paths.vaultDir, paths.trashDir)
     this.indexer = new Indexer(this.db, this.vault, this.nodes, this.edges)

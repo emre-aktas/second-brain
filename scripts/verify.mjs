@@ -42,6 +42,7 @@ const SUITE = [
   { file: 'src/main/canvas.probe.ts', mode: 'node' },
   { file: 'src/main/expiry.probe.ts', mode: 'node' },
   { file: 'src/main/tasks.probe.ts', mode: 'node' },
+  { file: 'src/main/notify.probe.ts', mode: 'node' },
   { file: 'src/main/agent/lifecycle.probe.ts', mode: 'node' },
   { file: 'src/main/agent/bridge.probe.ts', mode: 'node' },
 

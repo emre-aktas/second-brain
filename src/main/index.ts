@@ -16,7 +16,7 @@ import { appearance, useAppearanceFrom } from './appearance'
 import { openSessionIds, registerIpc, unregisterIpc } from './ipc'
 import { createLogger, initLogger, onLogEntry } from './logger'
 import { Scheduler } from './tasks/scheduler'
-import { Notifier } from './notify'
+import { configureToastIdentity, Notifier } from './notify'
 import { trafficLightPosition } from '@shared/window-chrome'
 
 const log = createLogger('main')
@@ -34,6 +34,21 @@ let scheduler: Scheduler | null = null
 let notifier: Notifier | null = null
 let broadcaster: Broadcaster | null = null
 let shuttingDown = false
+
+/**
+ * A reveal that arrived before any window could hear it.
+ *
+ * Collected once by the renderer's bootstrap and then cleared. Only ever set when there
+ * was no audience for the broadcast; setting it alongside a successful broadcast would
+ * replay a stale reveal on the next launch.
+ */
+let pendingReveal: string | null = null
+
+export function takePendingReveal(): string | null {
+  const value = pendingReveal
+  pendingReveal = null
+  return value
+}
 
 // A second instance would open the same SQLite index and the same vault watcher.
 // quit() is asynchronous, so `whenReady` would still fire and bootstrap would run
@@ -119,6 +134,10 @@ async function bootstrap(): Promise<void> {
   initLogger(paths.logFile)
   log.info(`Second Brain ${app.getVersion()} starting`)
   log.info(`workspace: ${paths.root}`)
+
+  // Before any window: Windows reads the identity when a window first appears, and
+  // Electron writes its shortcut from it.
+  configureToastIdentity()
 
   core = new BrainCore(paths, settings)
 
@@ -219,13 +238,27 @@ async function bootstrap(): Promise<void> {
   // Told about replies, proactive runs and questions so it can decide whether the
   // user needs to hear about them. It brings the app forward itself, because a toast
   // that raises a window but does not show what it was about is worse than none.
-  notifier = new Notifier(core, agent, (sessionId) => {
-    if (window && !window.isDestroyed()) {
+  notifier = new Notifier(core, agent, (sessionId, inboxId) => {
+    if (inboxId) core?.inbox.markRead(inboxId)
+
+    // macOS keeps the app alive with no windows, so a click can arrive when there is
+    // nothing to reveal into. Recreating the window is the difference between the click
+    // working and doing nothing at all.
+    if (!window || window.isDestroyed()) window = createWindow()
+    else {
       if (window.isMinimized()) window.restore()
       window.show()
       window.focus()
     }
-    if (sessionId) core?.broadcast('chat:reveal', { sessionId })
+
+    if (!sessionId) return
+
+    // A freshly created window has not finished loading, so a broadcast now would be
+    // dropped. It is held for the renderer to collect on bootstrap instead — and held
+    // *only* in that case, because a pending reveal that outlives its delivery would
+    // yank the user into an old chat the next time the app started.
+    if (broadcaster && broadcaster.audience() > 0) core?.broadcast('chat:reveal', { sessionId })
+    else pendingReveal = sessionId
   })
   notifier.start()
 
@@ -239,6 +272,7 @@ async function bootstrap(): Promise<void> {
     shortcuts,
     previewer,
     scheduler,
+    takePendingReveal,
     getWindow: () => window
   })
 

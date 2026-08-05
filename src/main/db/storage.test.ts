@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Db } from './sqlite'
 import { migrate } from './schema'
+import { InboxStore } from './inbox'
 import { EdgeStore, NodeStore } from './nodes'
 import { GraphStore } from './graph'
 import { ActivityStore, KvStore, SuggestionStore } from './meta'
@@ -297,6 +298,70 @@ check('claude session id stored', chat.getSession(session.id)?.claudeSessionId, 
 check('total spend', chat.totalSpend(), 0.02)
 
 section('reopen from disk')
+/* ------------------------------------------------------------------- inbox */
+
+// The reliable half of notifications. A Windows toast is delivered to a shell identity
+// and the click can be lost entirely, so this list is what makes "you were away"
+// recoverable — which means it has to survive a restart and it has to count correctly.
+
+console.log('\ninbox')
+
+const inbox = new InboxStore(db)
+const inboxSession = chat.createSession('a chat with something to say')
+
+check('an empty inbox has nothing unread', inbox.unreadCount(), 0)
+
+const firstEntry = inbox.add({
+  sessionId: inboxSession.id,
+  kind: 'reply',
+  title: 'Second Brain replied',
+  body: 'found three things'
+})
+check('an entry is stored', inbox.get(firstEntry.id)?.title, 'Second Brain replied')
+check('and starts unread', inbox.get(firstEntry.id)?.readAt, null)
+check('so the count sees it', inbox.unreadCount(), 1)
+
+// Something the user was plainly looking at must not add to the badge.
+const seen = inbox.add({
+  sessionId: inboxSession.id,
+  kind: 'question',
+  title: 'The agent is asking',
+  read: true
+})
+check('an already-seen entry is stored read', inbox.get(seen.id)?.readAt !== null, true)
+check('and does not add to the count', inbox.unreadCount(), 1)
+
+check('the list is newest first', inbox.list()[0]?.id, seen.id)
+
+inbox.markRead(firstEntry.id)
+check('marking one read clears it', inbox.unreadCount(), 0)
+
+// Reaching the chat any other way is also reading it — the badge must not keep
+// insisting after the user has read the thing.
+const other = chat.createSession('another')
+inbox.add({ sessionId: other.id, kind: 'task', title: 'Slack digest' })
+inbox.add({ sessionId: other.id, kind: 'task', title: 'Slack digest again' })
+check('two waiting on one chat', inbox.unreadCount(), 2)
+check('opening that chat clears both', inbox.markSessionRead(other.id), 2)
+check('and the count agrees', inbox.unreadCount(), 0)
+check('a session with nothing waiting clears nothing', inbox.markSessionRead(other.id), 0)
+
+inbox.add({ sessionId: null, kind: 'reply', title: 'a chat that has since gone' })
+check('an entry can outlive its chat', inbox.list()[0]?.sessionId, null)
+
+// markRead with no id is "all", which is what the popover's button uses.
+inbox.add({ sessionId: inboxSession.id, kind: 'reply', title: 'one' })
+inbox.add({ sessionId: inboxSession.id, kind: 'reply', title: 'two' })
+check('several unread', inbox.unreadCount() >= 2, true)
+inbox.markRead()
+check('mark all read clears everything', inbox.unreadCount(), 0)
+
+// Bounded, or the list grows for ever.
+for (let i = 0; i < 30; i++) inbox.add({ sessionId: null, kind: 'reply', title: `bulk ${i}` })
+inbox.prune(10)
+check('pruning keeps the newest', inbox.list(100).length, 10)
+check('and keeps the newest ones', inbox.list(1)[0]?.title, 'bulk 29')
+
 db.close()
 const db2 = new Db(join(root, '.brain', 'index.db'))
 const nodes2 = new NodeStore(db2)

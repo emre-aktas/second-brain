@@ -16,6 +16,7 @@ import type {
   NodeKind,
   DeepPartial,
   SavedTool,
+  InboxEntry,
   ScheduledTask,
   TaskRun,
   TaskRunResult,
@@ -124,6 +125,11 @@ export interface BudgetStatus {
 }
 
 export interface BootstrapPayload {
+  /**
+   * A chat to open immediately, from a notification clicked before any window existed.
+   * Cleared as it is read, so it cannot replay on a later launch.
+   */
+  pendingReveal: string | null
   budget: BudgetStatus
   workspace: WorkspaceInfo
   settings: Settings
@@ -253,6 +259,12 @@ export interface ApiMap {
   'tasks:openSession': (payload: { id: string }) => { sessionId: string | null }
   /** A task's run history, newest first. */
   'tasks:runs': (payload: { id: string; limit?: number }) => TaskRun[]
+
+  /* ---------------------------------------------------------------- the inbox */
+
+  'inbox:list': (payload: void) => { entries: InboxEntry[]; unread: number }
+  /** One entry, or everything when `id` is absent. */
+  'inbox:read': (payload: { id?: string }) => { unread: number }
 
   'tools:list': (payload: void) => SavedTool[]
   'tools:setPinned': (payload: { id: string; pinned: boolean }) => void
@@ -414,6 +426,8 @@ export const API_CHANNELS: ApiChannel[] = [
   'tasks:runNow',
   'tasks:openSession',
   'tasks:runs',
+  'inbox:list',
+  'inbox:read',
   'tools:list',
   'tools:setPinned',
   'tools:remove',
@@ -464,6 +478,8 @@ export interface EventMap {
   'settings:changed': Settings
   'integrations:changed': void
   'tools:changed': void
+  /** Something landed in the inbox, or was read. */
+  'inbox:changed': void
   /** A scheduled task was created, edited, or has just run. */
   'tasks:changed': void
   /**
@@ -515,6 +531,7 @@ export const EVENT_CHANNELS: EventChannel[] = [
   'integrations:changed',
   'tools:changed',
   'tasks:changed',
+  'inbox:changed',
   'chat:reveal',
   'tools:stateChanged',
   'tools:activate',

@@ -40,6 +40,13 @@ export interface IpcContext {
   shortcuts: ShortcutManager
   previewer: ToolPreviewer
   scheduler: Scheduler
+  /**
+   * A reveal that arrived before any window could hear it, collected once.
+   *
+   * Passed in rather than imported: index.ts already imports registerIpc from here, so
+   * reaching back the other way would be a require cycle in the CJS main bundle.
+   */
+  takePendingReveal: () => string | null
   getWindow: () => BrowserWindow | null
 }
 
@@ -270,6 +277,16 @@ export function registerIpc(ctx: IpcContext): void {
 
     'tasks:runs': ({ id, limit }) => core.taskRuns.forTask(id, limit ?? 20),
 
+    /* ------------------------------------------------------------- the inbox */
+
+    'inbox:list': () => ({ entries: core.inbox.list(), unread: core.inbox.unreadCount() }),
+
+    'inbox:read': ({ id }) => {
+      core.inbox.markRead(id)
+      core.broadcast('inbox:changed')
+      return { unread: core.inbox.unreadCount() }
+    },
+
     /* -------------------------------------------------------- saved tools */
 
     'tools:list': () => core.tools.list(),
@@ -418,6 +435,9 @@ export function registerIpc(ctx: IpcContext): void {
 
     'app:bootstrap': async () => ({
       budget: budgetStatus(),
+      // Collected here, so a notification clicked while the app was closed still lands
+      // on the right chat once the renderer is listening.
+      pendingReveal: ctx.takePendingReveal(),
       workspace: {
         root: core.paths.root,
         vaultDir: core.paths.vaultDir,
@@ -531,6 +551,10 @@ export function registerIpc(ctx: IpcContext): void {
     'chat:session': ({ id }) => {
       // Remembered so the scheduler never retires a chat a window is showing.
       rememberOpened(id)
+      // Opening a chat is reading it, however the user got here — the history list, the
+      // Scheduled tab, a notification. Without this the unread badge keeps insisting
+      // there is something to see after they have seen it.
+      if (core.inbox.markSessionRead(id) > 0) core.broadcast('inbox:changed')
       return core.chat.getSession(id) ?? null
     },
     'chat:createSession': () => core.chat.createSession(),

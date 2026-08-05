@@ -14,6 +14,7 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { GenUi } from '@/components/genui/GenUiRenderer'
 import { PinnedToolStrip } from '@/components/panels/ToolsPanel'
 import { HistoryPopover } from './HistoryPopover'
+import { InboxPopover } from './InboxPopover'
 import { AttachButton, AttachmentStrip, readImageFiles } from './Attachments'
 import { QuestionCard } from './QuestionCard'
 import { TouchedNotes, touchedNotes } from './TouchedNotes'
@@ -124,6 +125,7 @@ export function ChatPanel(): React.JSX.Element {
               {showActivity ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
             </Button>
           </Tooltip>
+          <InboxPopover />
           <HistoryPopover />
           <CapabilityPicker value={capability} onChange={(next) => void setCapability(next)} />
           <Tooltip content="New conversation">

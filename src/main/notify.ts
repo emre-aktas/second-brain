@@ -1,19 +1,112 @@
 import { app, BrowserWindow, Notification } from 'electron'
+import { tmpdir } from 'node:os'
 import type { BrainCore } from './core'
 import type { AgentManager } from './agent/manager'
-import type { AgentEvent } from '@shared/types'
+import type { AgentEvent, InboxKind } from '@shared/types'
 import type { PendingQuestion } from '@shared/ipc'
 import { createLogger } from './logger'
 
 const log = createLogger('notify')
 
 /**
- * Must be byte-identical to `appId` in electron-builder.yml.
+ * The Windows toast identity for this build channel.
  *
- * Windows attributes a toast to the shortcut's identity rather than the process's, and
- * a mismatch does not warn — the notification simply never appears.
+ * A toast is not delivered to a process, it is delivered to an *identity*: Windows looks
+ * up the AppUserModelID, finds the COM activator class registered for it, and starts
+ * whatever `LocalServer32` names. If no Start Menu shortcut carrying that identity points
+ * at the executable that is actually running, the click is resolved to something else — or
+ * to a path that no longer exists — and the app never hears about it. That is why clicking
+ * a notification did nothing, and it is a shell-level failure that no amount of in-app
+ * code can fix.
+ *
+ * Two things follow. The activator CLSID is pinned rather than left for Electron to
+ * generate, so the shortcut, the registry and the running process agree across launches.
+ * And each channel gets its own identity: a dev run, a portable exe and an installed copy
+ * are three different executables, and letting them share one identity means whichever
+ * ran last owns it.
+ *
+ * The installed value must stay byte-identical to `appId` in electron-builder.yml — the
+ * installer stamps that onto its shortcut (build/installer.nsh), and changing it here
+ * would orphan every installed copy's toasts.
  */
-const APP_USER_MODEL_ID = 'io.github.emreaktas.secondbrain'
+type ToastChannel = 'installed' | 'portable' | 'dev'
+
+interface ToastIdentity {
+  aumid: string
+  clsid: string
+}
+
+const TOAST_IDENTITY: Record<ToastChannel, ToastIdentity> = {
+  installed: {
+    aumid: 'io.github.emreaktas.secondbrain',
+    clsid: '{6E1B3A64-8C4F-4E2A-9D71-2F0B5C8A7E31}'
+  },
+  portable: {
+    aumid: 'io.github.emreaktas.secondbrain.portable',
+    clsid: '{6E1B3A64-8C4F-4E2A-9D71-2F0B5C8A7E32}'
+  },
+  dev: {
+    aumid: 'io.github.emreaktas.secondbrain.dev',
+    clsid: '{6E1B3A64-8C4F-4E2A-9D71-2F0B5C8A7E33}'
+  }
+}
+
+/**
+ * Which of the three this process is.
+ *
+ * Pure and exported so it can be tested without an Electron app object — the probe for
+ * this cannot import anything that touches `app` at module scope.
+ */
+export function toastChannelFor(input: {
+  packaged: boolean
+  exePath: string
+  tmpDir: string
+}): ToastChannel {
+  if (!input.packaged) return 'dev'
+  // A portable build unpacks itself into a temp directory and runs from there, so its
+  // LocalServer32 path stops existing the moment it exits. Nothing can make that
+  // activate reliably, which is the strongest argument for the in-app inbox below.
+  const exe = input.exePath.toLowerCase()
+  const tmp = input.tmpDir.toLowerCase()
+  return exe.startsWith(tmp) ? 'portable' : 'installed'
+}
+
+/**
+ * Claim this build's toast identity with Windows.
+ *
+ * Must run before the first window: Windows reads the AppUserModelID when a window
+ * appears, and Electron writes its Start Menu shortcut from it. Doing it from
+ * `Notifier.start()` — which runs after `createWindow()` — was already too late.
+ */
+export function configureToastIdentity(): void {
+  if (process.platform !== 'win32') return
+
+  const identity = toastIdentityFor({
+    packaged: app.isPackaged,
+    exePath: app.getPath('exe'),
+    tmpDir: tmpdir()
+  })
+
+  try {
+    app.setAppUserModelId(identity.aumid)
+    // Pinned rather than generated. With no pin the activator class differs between
+    // launches, so the shortcut on disk, the registry entry and the running process can
+    // all disagree about who should receive a click.
+    app.setToastActivatorCLSID(identity.clsid)
+    log.info(`toast identity ${identity.aumid} ${identity.clsid}`)
+  } catch (err) {
+    // An unparsable CLSID throws. Notifications degrade; the inbox does not.
+    log.warn('could not claim the toast identity', err)
+  }
+}
+
+export function toastIdentityFor(input: {
+  packaged: boolean
+  exePath: string
+  tmpDir: string
+}): ToastIdentity {
+  return TOAST_IDENTITY[toastChannelFor(input)]
+}
 
 /** Trim a reply down to something that fits in a notification without a scrollbar. */
 function preview(text: string, limit = 180): string {
@@ -39,23 +132,33 @@ function preview(text: string, limit = 180): string {
  */
 export class Notifier {
   private disposers: (() => void)[] = []
+  /** False when the desktop cannot show a toast at all. The inbox does not care. */
+  private toastable = true
+
+  /**
+   * Toasts still in the notification centre.
+   *
+   * Held because nothing else references a Notification after `show()` returns, while a
+   * Windows toast sits in Action Center for minutes — and its 'click' can arrive at any
+   * point in that window. Bounded, and entries are dropped as they resolve.
+   */
+  private live = new Map<string, Notification>()
 
   constructor(
     private core: BrainCore,
     private agent: AgentManager,
-    /** Brings the app forward and opens a chat. */
-    private reveal: (sessionId: string | null) => void
+    /** Brings the app forward and opens a chat, marking the inbox entry read. */
+    private reveal: (sessionId: string | null, inboxId: string | null) => void
   ) {}
 
   start(): void {
-    // Windows shows the shortcut's identity on a toast, not the process's, and
-    // without this it either falls back to "electron.app.Electron" or drops the
-    // notification. electron-builder installs a shortcut with this id.
-    if (process.platform === 'win32') app.setAppUserModelId(APP_USER_MODEL_ID)
-
-    if (!Notification.isSupported()) {
-      log.info('the desktop does not support notifications; none will be sent')
-      return
+    // Deliberately not gated on Notification.isSupported(). Everything worth telling the
+    // user is recorded in the inbox whether or not this desktop can show a toast, so the
+    // subscriptions have to be made either way — gating them behind the OS was how the
+    // fallback ended up depending on the thing it exists to work around.
+    this.toastable = Notification.isSupported()
+    if (!this.toastable) {
+      log.info('the desktop cannot show notifications; the inbox will still fill')
     }
 
     this.disposers.push(this.agent.onAgentEvent((event) => this.onAgentEvent(event)))
@@ -101,13 +204,17 @@ export class Notifier {
     if (!settings.enabled || !settings.onQuestion) return
 
     const task = this.core.tasks.bySession(question.sessionId)
+    const seen = !this.unattended()
     this.send({
       title: task ? `${task.name} is asking` : 'The agent is asking',
       body: preview(question.question, 140),
       sessionId: question.sessionId,
+      taskId: task?.id ?? null,
+      kind: 'question',
       // Silent when they are right here: the card is already on screen, so this is a
       // marker in the notification centre rather than an interruption.
-      silent: !this.unattended()
+      silent: seen,
+      alreadySeen: seen
     })
   }
 
@@ -137,6 +244,8 @@ export class Notifier {
         title: task.name,
         body: preview(text),
         sessionId: event.sessionId,
+        taskId: task.id,
+        kind: 'task',
         silent: false
       })
       return
@@ -149,19 +258,45 @@ export class Notifier {
       title: 'Second Brain replied',
       body: preview(text),
       sessionId: event.sessionId,
+      kind: 'reply',
       silent: false
     })
   }
 
   /* ---------------------------------------------------------------- sending */
 
+  /**
+   * Record it, then try to tell the operating system.
+   *
+   * In that order, and that is the whole design. The inbox row is written first and
+   * unconditionally, so what happened is recoverable from inside the app; the toast is
+   * best-effort on top. When Windows refuses to deliver a click — a normal state for a
+   * dev run and an unfixable one for a portable build — nothing is lost.
+   */
   private send(input: {
     title: string
     body: string
     sessionId: string | null
+    taskId?: string | null
+    kind: InboxKind
     silent: boolean
+    /** True for something the user is plainly already looking at. */
+    alreadySeen?: boolean
   }): void {
-    if (!Notification.isSupported()) return
+    const entry = this.core.inbox.add({
+      sessionId: input.sessionId,
+      taskId: input.taskId ?? null,
+      kind: input.kind,
+      title: input.title,
+      body: input.body,
+      // A question raised while the app has focus is already on screen; an unread badge
+      // for it would break the rule this whole file is built on.
+      read: input.alreadySeen === true
+    })
+    this.core.inbox.prune()
+    this.core.broadcast('inbox:changed')
+
+    if (!this.toastable) return
 
     try {
       const notification = new Notification({
@@ -170,11 +305,34 @@ export class Notifier {
         silent: input.silent
       })
 
+      this.live.set(entry.id, notification)
+      if (this.live.size > 32) {
+        const oldest = this.live.keys().next().value
+        if (oldest !== undefined) this.live.delete(oldest)
+      }
+
+      const settle = (): void => {
+        this.live.delete(entry.id)
+      }
+
       // The click has to land somewhere useful. A toast that only raises the window
-      // leaves the user hunting for what it was about — especially for a task, whose
-      // chat is archived and not in the recent list.
-      notification.on('click', () => this.reveal(input.sessionId))
+      // leaves the user hunting for what it was about — especially for a scheduled run,
+      // whose chat is archived and not in the recent list.
+      notification.on('click', () => {
+        log.info(`notification clicked (${input.kind})`)
+        settle()
+        this.reveal(input.sessionId, entry.id)
+      })
+      notification.on('close', settle)
+      // Windows-only, and the one event that says the shell refused it. Without this
+      // there was no way to tell "never shown" from "shown and ignored".
+      notification.on('failed', (_event, error) => {
+        settle()
+        log.warn(`the desktop refused a notification: ${error}`)
+      })
+
       notification.show()
+      log.info(`notification shown (${input.kind}${input.silent ? ', silent' : ''})`)
     } catch (err) {
       log.warn('could not show a notification', err)
     }
