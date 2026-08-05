@@ -19,7 +19,7 @@ import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { NotePanel } from '@/components/panels/NotePanel'
 import { ActivityPanel, SettingsPanel } from '@/components/panels/SidePanels'
-import { TasksPanel } from '@/components/panels/TasksPanel'
+import { ScheduledPanel } from '@/components/panels/ScheduledPanel'
 import { ToolsPanel } from '@/components/panels/ToolsPanel'
 import { ToolView } from '@/components/tools/ToolView'
 import { CommandPalette } from '@/components/CommandPalette'
@@ -294,7 +294,7 @@ function Shell(): React.JSX.Element {
             {panel === 'chat' && <ChatPanel />}
             {panel === 'note' && <NotePanel />}
             {panel === 'tools' && <ToolsPanel />}
-            {panel === 'tasks' && <TasksPanel />}
+            {panel === 'tasks' && <ScheduledPanel />}
             {panel === 'activity' && <ActivityPanel />}
             {panel === 'settings' && <SettingsPanel />}
           </div>
