@@ -33,9 +33,13 @@ export function InboxPopover(): React.JSX.Element {
   const boxRef = useRef<HTMLDivElement | null>(null)
 
   const refresh = async (): Promise<void> => {
-    const { entries: list, unread: count } = await api.listInbox()
-    setEntries(list)
-    setUnread(count)
+    // Read defensively rather than destructured. This crosses an IPC boundary, and a
+    // reply that is not the expected shape should leave an empty inbox behind — not throw
+    // inside a render and take the whole chat panel with it, which is exactly what
+    // happened when a probe stubbed every channel with an array.
+    const reply = (await api.listInbox()) as { entries?: InboxEntry[]; unread?: number } | null
+    setEntries(Array.isArray(reply?.entries) ? reply.entries : [])
+    setUnread(typeof reply?.unread === 'number' ? reply.unread : 0)
   }
 
   useEffect(() => {

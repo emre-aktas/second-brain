@@ -101,6 +101,10 @@ async function main(): Promise<void> {
   app.on('window-all-closed', () => {})
 
   for (const channel of API_CHANNELS) ipcMain.handle(channel, () => [])
+  // A blanket [] is a lie for anything whose reply is an object; the renderer reads
+  // fields off these, and an array has none of them.
+  ipcMain.removeHandler('inbox:list')
+  ipcMain.handle('inbox:list', () => ({ entries: [], unread: 0 }))
   for (const channel of ['app:bootstrap', 'app:settings:get', 'chat:messages', 'chat:sessions', 'graph:get']) {
     ipcMain.removeHandler(channel)
   }

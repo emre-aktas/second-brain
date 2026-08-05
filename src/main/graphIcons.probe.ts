@@ -506,6 +506,11 @@ async function main(): Promise<void> {
   for (const channel of API_CHANNELS) {
     ipcMain.handle(channel, () => [])
   }
+  // A blanket [] is a lie for any channel whose reply is an object: the renderer reads
+  // fields off these, and an array has none of them. One of them taking the shell down
+  // is the very failure the loop above exists to prevent.
+  ipcMain.removeHandler('inbox:list')
+  ipcMain.handle('inbox:list', () => ({ entries: [], unread: 0 }))
 
   for (const channel of [
     'app:bootstrap',
