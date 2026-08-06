@@ -24,6 +24,7 @@ import type {
 import { api, errorMessage, onEvent } from '@/lib/api'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toast } from '@/components/ui/sonner'
+import { configureSound, cue } from '@/lib/sound'
 
 export type Panel = 'chat' | 'note' | 'tools' | 'tasks' | 'activity' | 'integrations' | 'settings'
 
@@ -297,6 +298,8 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     await hydrateGenUi(messages, set)
 
+    configureSound(bootstrap.settings.sound)
+
     wireEvents(set, get)
 
     // A notification clicked while the app was closed. Done after wireEvents so the
@@ -551,6 +554,7 @@ export const useApp = create<AppState>((set, get) => ({
   async updateSettings(patch) {
     const settings = await api.updateSettings(patch)
     set({ settings })
+    configureSound(settings.sound)
     if (patch.appearance?.theme) {
       document.documentElement.classList.toggle('dark', patch.appearance.theme !== 'light')
     }
@@ -644,7 +648,12 @@ function wireEvents(set: Setter, get: () => AppState): void {
     void get().refreshSuggestions()
   })
 
-  onEvent('settings:changed', (settings) => set({ settings }))
+  onEvent('settings:changed', (settings) => {
+    set({ settings })
+    // The volume and the on/off live inside cuelume, so they have to be pushed rather than
+    // read at play time — otherwise turning sound off in one window leaves it on in another.
+    configureSound(settings.sound)
+  })
 
   onEvent('tools:changed', () => {
     void get().refreshTools()
@@ -668,6 +677,7 @@ function wireEvents(set: Setter, get: () => AppState): void {
   })
 
   onEvent('chat:question', (question) => {
+    cue('question')
     set((state) => {
       // Keyed by id, because the same question can arrive twice: the event is broadcast to
       // every window, and a tool's popped-out window subscribes to it on its own account as
@@ -791,7 +801,12 @@ function wireEvents(set: Setter, get: () => AppState): void {
         })
         // Cost is a property of the turn the user is watching, not of every turn in
         // flight — a background task finishing must not relabel what this one spent.
-        if (isActive) set({ lastTurnCost: event.costUsd })
+        if (isActive) {
+          set({ lastTurnCost: event.costUsd })
+          // Only the chat on screen, and only with focus — `cue` enforces the second. A
+          // background task finishing must not chirp about a conversation the user cannot see.
+          cue(event.isError ? 'error' : 'reply')
+        }
         void get().refreshSessions()
         // Keep the readouts honest immediately after every turn.
         void get().refreshBudget()
@@ -810,7 +825,10 @@ function wireEvents(set: Setter, get: () => AppState): void {
         // Only for the chat being looked at. A toast about a scheduled run that
         // failed at 3am, surfaced over whatever the user is doing now, is noise —
         // the Scheduled tab records it as the task's last outcome instead.
-        if (isActive) toast.error('The agent hit a problem', { description: event.message })
+        if (isActive) {
+          toast.error('The agent hit a problem', { description: event.message })
+          cue('error')
+        }
         break
       }
     }

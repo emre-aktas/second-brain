@@ -633,6 +633,7 @@ const SETTINGS = {
   chat: { showToolActivity: false },
   graph: { showTags: true, showSimilarEdges: true, linkDistance: 83, charge: -282, labelThreshold: 0.75, rotate: false },
   layout: { panelWidth: 430 },
+  sound: { enabled: false, volume: 0.35 },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 

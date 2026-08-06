@@ -883,6 +883,17 @@ export interface Settings {
     panelWidth: number
   }
   /**
+   * Interaction sounds.
+   *
+   * Three events only, and only while the window has focus — see `lib/sound.ts` for why
+   * that complement is the whole design rather than an optimisation.
+   */
+  sound: {
+    enabled: boolean
+    /** 0 to 1. Low by default: this is a cue, not an announcement. */
+    volume: number
+  }
+  /**
    * Work the app starts on its own.
    *
    * One switch over the whole thing, because being checked on by software is not

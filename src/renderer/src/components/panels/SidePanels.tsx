@@ -775,6 +775,36 @@ export function SettingsPanel(): React.JSX.Element {
           <Separator />
 
           <section>
+            <SectionTitle>Sound</SectionTitle>
+            <Row
+              label="Play a sound"
+              hint="When an answer lands, a question needs you, or something fails — and only while this window has focus, since otherwise your desktop notification already makes one"
+            >
+              <Switch
+                checked={settings.sound.enabled}
+                onCheckedChange={(enabled) =>
+                  void updateSettings({ sound: { ...settings.sound, enabled } })
+                }
+              />
+            </Row>
+            {settings.sound.enabled && (
+              <Row label="Volume">
+                <RangeInput
+                  value={Math.round(settings.sound.volume * 100)}
+                  min={5}
+                  max={100}
+                  format={(percent) => `${percent}%`}
+                  onChange={(percent) =>
+                    void updateSettings({ sound: { ...settings.sound, volume: percent / 100 } })
+                  }
+                />
+              </Row>
+            )}
+          </section>
+
+          <Separator />
+
+          <section>
             <SectionTitle>Appearance</SectionTitle>
             <Row label="Dark theme">
               <Switch

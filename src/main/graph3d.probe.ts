@@ -131,6 +131,7 @@ const SETTINGS = {
     rotate: true
   },
   layout: { panelWidth: 430 },
+  sound: { enabled: false, volume: 0.35 },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 

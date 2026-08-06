@@ -47,6 +47,13 @@ export function defaultSettings(workspacePath: string): Settings {
     layout: {
       panelWidth: 430
     },
+    sound: {
+      // On, quietly. It fires when an answer arrives while the user is looking at the app,
+      // which is information they want and which the desktop notifier deliberately stays
+      // silent for — so off by default would leave that moment with no cue at all.
+      enabled: true,
+      volume: 0.35
+    },
     appearance: {
       theme: 'dark',
       accent: 'violet',
