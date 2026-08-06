@@ -325,15 +325,32 @@ async function until(what: () => boolean, timeoutMs: number, step = 120): Promis
 }
 
 /**
- * Whether the page considers itself visible.
+ * How many animation frames the page gets in half a second.
  *
- * Auto-rotation is gated on visibility, deliberately — a minimised window must not burn a
- * GPU. An off-screen window on a CI runner can report itself hidden, and then a rotation
- * check is not failing, it is unrunnable. Better to say so than to assert into the dark.
+ * The question a rotation check actually depends on. Auto-rotation is driven by
+ * `requestAnimationFrame` and gated on `document.visibilityState`, and on a CI runner the
+ * window is parked off-screen: it reports itself *visible* and Chromium still declines to
+ * schedule frames for it, because it is occluded. Two captures two seconds apart then come
+ * back identical — not because the graph does not turn, but because nothing was drawn between
+ * them. Asking the page how many frames it is getting tells the two apart, on any machine,
+ * without a CI flag standing in for the real condition.
  */
-async function pageVisible(win: BrowserWindow): Promise<boolean> {
-  return (
-    String(await win.webContents.executeJavaScript('document.visibilityState')) === 'visible'
+async function framesPerHalfSecond(win: BrowserWindow): Promise<number> {
+  return Number(
+    await win.webContents.executeJavaScript(`
+      new Promise((done) => {
+        let frames = 0
+        const stop = Date.now() + 500
+        const tick = () => {
+          frames++
+          if (Date.now() >= stop) done(frames)
+          else requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+        // A page getting no frames at all would never resolve.
+        setTimeout(() => done(frames), 900)
+      })
+    `)
   )
 }
 
@@ -452,11 +469,12 @@ async function main(): Promise<void> {
       return
     }
 
-    const visible = await pageVisible(win)
-    if (!visible) {
-      // Not a failure: rotation is gated on visibility on purpose, so a runner that reports
-      // its off-screen window as hidden cannot be asked this question.
-      log('  skip  the graph turns on its own (the page reports itself hidden)')
+    const frames = await framesPerHalfSecond(win)
+    log(`  animation frames in 500ms: ${frames}`)
+    if (frames < 8) {
+      // Not a failure. Rotation is one draw per frame, so a page that is not being given
+      // frames cannot be asked whether it turns — and on a headless runner it is not.
+      log(`  skip  the graph turns on its own (the page gets ${frames} frames in 500ms)`)
     } else {
       const first = await shoot(win, rect)
       // A full turn takes about three minutes, so two seconds is a couple of degrees. Enough
