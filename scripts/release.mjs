@@ -141,14 +141,23 @@ writeFileSync(changelogPath, updatedChangelog)
 
 git('add', 'package.json', 'CHANGELOG.md')
 git('commit', '-m', `Release ${tag}`)
-git('tag', tag)
+
+/*
+ * Annotated, and that is load-bearing.
+ *
+ * `git push --follow-tags` — the command printed below, and the one that starts the release
+ * workflow — pushes *annotated* tags only. A lightweight tag from a bare `git tag` is silently
+ * left behind: the commit goes up, CI never fires, and nothing anywhere says why. It happened
+ * once and the only clue was a release that never appeared.
+ */
+git('tag', '-a', tag, '-m', `Release ${tag}`)
 
 console.log(`Committed and tagged ${tag}.
 
 Read the changelog section above and edit it if it needs editing:
 
   git commit --amend
-  git tag -f ${tag}
+  git tag -a -f ${tag} -m "Release ${tag}"
 
 Then push. CI builds the installers and publishes the release, and every running copy
 finds it within a few hours:
