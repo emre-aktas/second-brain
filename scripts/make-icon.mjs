@@ -18,6 +18,10 @@
  * does — an earlier `make-icon.ps1` used System.Drawing and so could not be run on the
  * machine that builds the macOS artifact.
  *
+ * It also writes the two badged variants the unread indicator uses:
+ *   build/icon-unread.png  the app icon with a dot, for the window and taskbar
+ *   build/tray-unread.png  the same for the tray, where the dot has to survive 20px
+ *
  *   npm run icons
  *   ICON_PREVIEW=1 npm run icons   # also writes every size side by side, at 4x
  */
@@ -57,6 +61,39 @@ const REDRAW_BELOW = 64
 
 /** How much of the plate the glyph fills when it is laid out again. */
 const GLYPH_FILL = 0.76
+
+/**
+ * The unread dot.
+ *
+ * Drawn into the artwork rather than handed to the platform, because the platform's own
+ * overlay goes bottom-right on Windows and is not placeable — and a badge on an app icon
+ * belongs top-right, where every other application puts it.
+ *
+ * Two sizes, because the two places it appears shrink it by wildly different amounts: the
+ * window icon is seen at 32–48px, the tray at 20. A dot proportioned for the first is a
+ * smudge at the second, so the tray gets its own, larger.
+ *
+ * The ring is not decoration. The artwork is blue on near-white, so a blue dot laid straight
+ * on it can land on a blue stroke and vanish; a ring in the plate's own colour guarantees the
+ * dot has an edge whatever is underneath.
+ */
+const BADGE = {
+  /**
+   * Centre, as a fraction of the plate.
+   *
+   * Held in from the corner rather than tucked into it: the plate is rounded, so a dot placed
+   * at 0.78 had its ring painting over the transparent corner and the icon read as having a
+   * square corner on that side.
+   */
+  x: 0.742,
+  y: 0.258,
+  /** A clear blue, and deliberately more saturated than the artwork's own. */
+  fill: 'rgb(37, 99, 235)',
+  /** Small enough to be a badge. The first attempt covered a third of the icon. */
+  radius: { icon: 0.105, tray: 0.17 },
+  /** Ring width as a fraction of the dot's radius. */
+  ring: 0.3
+}
 
 /** Installed once on the page, then called for every size. */
 const DRAW_FUNCTION = `
@@ -145,7 +182,7 @@ const DRAW_FUNCTION = `
     }
   }
 
-  window.__drawIcon = (size, inset, redraw) => {
+  window.__drawIcon = (size, inset, redraw, badge) => {
     const source = window.__source
     const measured = window.__measured
     if (!source || !measured) throw new Error('the source artwork has not been loaded')
@@ -163,8 +200,40 @@ const DRAW_FUNCTION = `
     const box = size * scale
     const origin = (size - box) / 2
 
+    const badgeSpec = ${JSON.stringify(BADGE)}
+
+    /** The unread dot, over whatever has already been drawn. */
+    const drawBadge = () => {
+      if (!badge) return
+
+      // Clipped to the plate, so nothing can reach past a rounded corner even if the badge
+      // geometry is later moved outward. The belt to the braces above.
+      ctx.save()
+      ctx.beginPath()
+      ctx.roundRect(origin, origin, box, box, (measured.radius / source.width) * box)
+      ctx.clip()
+
+      const radius = box * badgeSpec.radius[badge]
+      const cx = origin + box * badgeSpec.x
+      const cy = origin + box * badgeSpec.y
+
+      // The ring first, in the plate's own colour, so the dot reads as sitting on top of the
+      // icon rather than being part of the drawing underneath it.
+      ctx.fillStyle = measured.plate
+      ctx.beginPath()
+      ctx.arc(cx, cy, radius * (1 + badgeSpec.ring), 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.fillStyle = badgeSpec.fill
+      ctx.beginPath()
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+
     if (!redraw) {
       ctx.drawImage(source, origin, origin, box, box)
+      drawBadge()
       return canvas.toDataURL('image/png')
     }
 
@@ -195,6 +264,7 @@ const DRAW_FUNCTION = `
       height
     )
 
+    drawBadge()
     return canvas.toDataURL('image/png')
   }
   true
@@ -241,10 +311,10 @@ const decode = (dataUrl) =>
 /** Laid out again only where the artwork's own proportions stop working. See REDRAW_BELOW. */
 const redrawAt = (size) => size < REDRAW_BELOW
 
-async function render(win, size, inset = false) {
+async function render(win, size, inset = false, badge = null) {
   return decode(
     await win.webContents.executeJavaScript(
-      `window.__drawIcon(${size}, ${inset}, ${redrawAt(size)})`
+      `window.__drawIcon(${size}, ${inset}, ${redrawAt(size)}, ${JSON.stringify(badge)})`
     )
   )
 }
@@ -277,7 +347,7 @@ async function preview(win, sizes) {
       let x = gap
       for (const [index, size] of sizes.entries()) {
         const image = new Image()
-        image.src = window.__drawIcon(size, false, redraw[index])
+        image.src = window.__drawIcon(size, false, redraw[index], null)
         await image.decode()
         ctx.drawImage(image, x, gap, size * zoom, size * zoom)
         x += size * zoom + gap
@@ -325,6 +395,21 @@ async function main() {
   const container = ico(entries)
   writeFileSync(join(outDir, 'icon.ico'), container)
   console.log(`wrote ${join(outDir, 'icon.ico')} (${sizes.join(', ')}, ${container.length} bytes)`)
+
+  /*
+   * The badged variants.
+   *
+   * 512 for the window icon, which Windows scales to 32 or 48; 256 for the tray, which the
+   * tray controller resizes to 20. Each is drawn at a size close to where it will be used so
+   * the downscale has little to do.
+   */
+  const unread = await render(win, 512, false, 'icon')
+  writeFileSync(join(outDir, 'icon-unread.png'), unread)
+  console.log(`wrote ${join(outDir, 'icon-unread.png')} (512, badged, ${unread.length} bytes)`)
+
+  const trayUnread = await render(win, 256, false, 'tray')
+  writeFileSync(join(outDir, 'tray-unread.png'), trayUnread)
+  console.log(`wrote ${join(outDir, 'tray-unread.png')} (256, badged, ${trayUnread.length} bytes)`)
 
   if (process.env['ICON_PREVIEW']) {
     const path = join(outDir, 'icon-preview.png')

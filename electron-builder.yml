@@ -21,6 +21,12 @@ files:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  # The badged variants, for the unread mark. Two of them because the dot has to be
+  # proportioned for where it is seen: 48px on a taskbar, 20px in the tray.
+  - from: build/icon-unread.png
+    to: icon-unread.png
+  - from: build/tray-unread.png
+    to: tray-unread.png
 
 # node-sqlite3-wasm resolves its .wasm relative to its own module directory,
 # so it must live outside the asar archive.

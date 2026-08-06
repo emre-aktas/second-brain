@@ -1,5 +1,5 @@
 import { app, Menu, nativeImage, Tray, type BrowserWindow } from 'electron'
-import { join } from 'node:path'
+import { appImage } from './appIcons'
 import { createLogger } from './logger'
 
 const log = createLogger('tray')
@@ -19,6 +19,7 @@ export class TrayController {
   private tray: Tray | null = null
   private quitting = false
   private warned = false
+  private unread = false
 
   constructor(
     private readonly getWindow: () => BrowserWindow | null,
@@ -56,6 +57,23 @@ export class TrayController {
   }
 
   /**
+   * Show, or stop showing, that something is waiting.
+   *
+   * The tray is the only part of this app visible when its window is not, so it is the one
+   * place the unread mark has to work — an app that quietly went to the tray with something to
+   * say and no sign of it is an app that lost the message.
+   */
+  setUnread(unread: boolean): void {
+    if (this.unread === unread) return
+    this.unread = unread
+    if (!this.tray) return
+
+    const image = this.icon()
+    if (!image.isEmpty()) this.tray.setImage(image)
+    this.tray.setToolTip(unread ? 'Second Brain — something to read' : 'Second Brain')
+  }
+
+  /**
    * A window close that should hide instead.
    *
    * Returns true when it handled the close. The caller prevents the default in that case.
@@ -80,6 +98,17 @@ export class TrayController {
     }
 
     return true
+  }
+
+  /**
+   * Which artwork the tray is currently showing.
+   *
+   * Exposed for `tray.probe.ts`: a `NativeImage` cannot usefully be compared, and asserting on
+   * the file name is asserting on the decision — whether the swap happened — rather than on
+   * pixels that would tell us nothing extra.
+   */
+  trayImageForTest(): string {
+    return this.unread ? 'tray-unread.png' : 'icon.png'
   }
 
   /** Mark a real quit, so the next close is allowed through. */
@@ -114,38 +143,25 @@ export class TrayController {
    * slot is what the platform will scale badly on its own.
    */
   private icon(): Electron.NativeImage {
-    // Several, because "where does this file live" has a different answer in a packaged
-    // app, under `npm run dev`, and inside a probe that bundles main into a temp directory —
-    // and a tray icon that silently fails to load is a window the user cannot get back.
-    const candidates = app.isPackaged
-      ? [
-          join(process.resourcesPath, 'icon.png'),
-          join(process.resourcesPath, 'app', 'build', 'icon.png')
-        ]
-      : [
-          join(app.getAppPath(), 'build', 'icon.png'),
-          join(process.cwd(), 'build', 'icon.png'),
-          join(__dirname, '..', '..', 'build', 'icon.png')
-        ]
+    /*
+     * The badged variant is a separate file rather than the same one with a dot drawn on it
+     * here, because there is nothing to draw with: the main process has no canvas. It is also
+     * proportioned differently — a dot sized for a 48px window icon is a smudge at 20px — so
+     * `make-icon.mjs` produces one for each place it appears.
+     */
+    const image = appImage(this.unread ? 'tray-unread.png' : 'icon.png')
+    if (image.isEmpty()) return nativeImage.createEmpty()
 
-    for (const path of candidates) {
-      const image = nativeImage.createFromPath(path)
-      if (image.isEmpty()) continue
-
-      const size = process.platform === 'darwin' ? 18 : 20
-      return image.resize({ width: size, height: size })
-      /*
-       * Not a template image, though that is the usual advice for macOS.
-       *
-       * A template image is a *mask*: macOS throws the colour away and re-tints by alpha, so
-       * it only works for artwork that is transparent except the glyph. This icon has its own
-       * opaque plate, which as a mask is a solid filled square — the menu bar would show a
-       * black block. Colour tray icons are perfectly normal, and the plate is what makes this
-       * one legible on a light menu bar and a dark one alike.
-       */
-    }
-
-    log.warn(`no tray icon found; looked in ${candidates.join(', ')}`)
-    return nativeImage.createEmpty()
+    const size = process.platform === 'darwin' ? 18 : 20
+    return image.resize({ width: size, height: size })
+    /*
+     * Not a template image, though that is the usual advice for macOS.
+     *
+     * A template image is a *mask*: macOS throws the colour away and re-tints by alpha, so it
+     * only works for artwork that is transparent except the glyph. This icon has its own
+     * opaque plate, which as a mask is a solid filled square — the menu bar would show a
+     * black block. Colour tray icons are perfectly normal, and the plate is what makes this
+     * one legible on a light menu bar and a dark one alike.
+     */
   }
 }

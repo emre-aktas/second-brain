@@ -108,6 +108,45 @@ export function toastIdentityFor(input: {
   return TOAST_IDENTITY[toastChannelFor(input)]
 }
 
+/**
+ * What a notification is called, and which row it becomes in the inbox.
+ *
+ * Pure and exported because this is a decision worth pinning rather than a formatting
+ * detail. A tool run that fell through to the ordinary-reply branch was announced as
+ * "Second Brain replied" — a title naming neither what ran nor where the answer went,
+ * attached to a chat the user is deliberately never shown. Three symptoms, one omission,
+ * and none of it visible from reading either branch on its own.
+ *
+ * Order matters: a tool wins over a task, because a scheduled run *of* a tool is still read
+ * in the tool. There is nothing to open for the task.
+ */
+export function announcementFor(input: {
+  what: 'result' | 'question'
+  tool: { name: string } | null
+  task: { name: string } | null
+}): { title: string; kind: InboxKind } {
+  const asking = input.what === 'question'
+
+  if (input.tool) {
+    return {
+      title: asking ? `${input.tool.name} is asking` : input.tool.name,
+      kind: 'tool'
+    }
+  }
+
+  if (input.task) {
+    return {
+      title: asking ? `${input.task.name} is asking` : input.task.name,
+      kind: asking ? 'question' : 'task'
+    }
+  }
+
+  return {
+    title: asking ? 'The agent is asking' : 'Second Brain replied',
+    kind: asking ? 'question' : 'reply'
+  }
+}
+
 /** Trim a reply down to something that fits in a notification without a scrollbar. */
 function preview(text: string, limit = 180): string {
   const flat = text
@@ -183,6 +222,19 @@ export class Notifier {
   /* --------------------------------------------------------------- deciding */
 
   /**
+   * The tool a chat belongs to, if it is a tool's plumbing rather than a conversation.
+   *
+   * Through the session, not through `tools.bySession`: a tool remembers only its latest
+   * run, so once the next one starts the previous run's toast can no longer name what it
+   * came from — and a toast in Action Center outlives several runs easily.
+   */
+  private toolFor(sessionId: string | null): { id: string; name: string } | undefined {
+    if (!sessionId) return undefined
+    const toolId = this.core.chat.toolIdFor(sessionId)
+    return toolId ? this.core.tools.get(toolId) : undefined
+  }
+
+  /**
    * True when the user cannot already see what we are about to tell them.
    *
    * Any window counts, not just the main one: a tool popped out into its own window
@@ -204,13 +256,15 @@ export class Notifier {
     if (!settings.enabled || !settings.onQuestion) return
 
     const task = this.core.tasks.bySession(question.sessionId)
+    const tool = this.toolFor(question.sessionId)
     const seen = !this.unattended()
+    const announcement = announcementFor({ what: 'question', tool: tool ?? null, task: task ?? null })
     this.send({
-      title: task ? `${task.name} is asking` : 'The agent is asking',
+      title: announcement.title,
       body: preview(question.question, 140),
       sessionId: question.sessionId,
       taskId: task?.id ?? null,
-      kind: 'question',
+      kind: announcement.kind,
       // Silent when they are right here: the card is already on screen, so this is a
       // marker in the notification centre rather than an interruption.
       silent: seen,
@@ -227,6 +281,28 @@ export class Notifier {
     const text = (event.text ?? '').trim()
     if (!text) return
 
+    /*
+     * A tool's run is announced as the tool, because that is the only place it can be read.
+     *
+     * Falling through to the ordinary-reply branch is what produced "Second Brain replied"
+     * for a button press: a title that names neither what ran nor where the answer went,
+     * pointing at an archived chat the user is deliberately never shown.
+     */
+    const tool = this.toolFor(event.sessionId)
+    if (tool) {
+      if (!settings.onReply || !this.unattended()) return
+
+      const announcement = announcementFor({ what: 'result', tool, task: null })
+      this.send({
+        title: announcement.title,
+        body: preview(text),
+        sessionId: event.sessionId,
+        kind: announcement.kind,
+        silent: false
+      })
+      return
+    }
+
     const task = this.core.tasks.bySession(event.sessionId)
 
     if (task) {
@@ -240,12 +316,13 @@ export class Notifier {
       // turn a deliberately quiet feature into an hourly interruption.
       if (/^nothing to report\.?$/i.test(text)) return
 
+      const announcement = announcementFor({ what: 'result', tool: null, task })
       this.send({
-        title: task.name,
+        title: announcement.title,
         body: preview(text),
         sessionId: event.sessionId,
         taskId: task.id,
-        kind: 'task',
+        kind: announcement.kind,
         silent: false
       })
       return
@@ -254,11 +331,12 @@ export class Notifier {
     // An ordinary chat reply. Only worth a toast if they walked away from it.
     if (!settings.onReply || !this.unattended()) return
 
+    const announcement = announcementFor({ what: 'result', tool: null, task: null })
     this.send({
-      title: 'Second Brain replied',
+      title: announcement.title,
       body: preview(text),
       sessionId: event.sessionId,
-      kind: 'reply',
+      kind: announcement.kind,
       silent: false
     })
   }

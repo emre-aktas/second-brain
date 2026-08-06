@@ -58,11 +58,35 @@ export class ChatStore {
     }
   }
 
+  /**
+   * Mark a chat as a tool's plumbing.
+   *
+   * Permanent, unlike `saved_tools.session_id`, which only ever points at the latest run.
+   * Two things depend on it: a notification about any run can find its tool, and none of
+   * these chats is ever listed as a conversation.
+   */
+  attachTool(sessionId: string, toolId: string): void {
+    this.db.run('UPDATE sessions SET tool_id = ? WHERE id = ?', [toolId, sessionId])
+  }
+
+  /** The tool this chat runs for, if it is a tool's rather than the user's. */
+  toolIdFor(sessionId: string): string | null {
+    return this.db.pluck<string>('SELECT tool_id FROM sessions WHERE id = ?', [sessionId]) ?? null
+  }
+
+  /**
+   * The user's conversations.
+   *
+   * Tool runs are excluded even with `includeArchived`, and that is the point rather than a
+   * side effect of them being archived: a tool's chat holds a generated prompt and the
+   * agent's answer to it, which read as the app talking to itself. The interface the user
+   * pressed a button in is where that work belongs, and it is the only place it appears.
+   */
   listSessions(limit = 50, includeArchived = false): ChatSession[] {
     const rows = this.db.all<{ id: string }>(
       includeArchived
-        ? 'SELECT id FROM sessions ORDER BY updated_at DESC LIMIT ?'
-        : 'SELECT id FROM sessions WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?',
+        ? 'SELECT id FROM sessions WHERE tool_id IS NULL ORDER BY updated_at DESC LIMIT ?'
+        : 'SELECT id FROM sessions WHERE tool_id IS NULL AND archived = 0 ORDER BY updated_at DESC LIMIT ?',
       [limit]
     )
     return rows.map((r) => this.getSession(r.id)!).filter(Boolean)

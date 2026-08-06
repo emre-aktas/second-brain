@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Bell, CalendarClock, HelpCircle, MessageSquare } from 'lucide-react'
+import { AlertCircle, Bell, CalendarClock, HelpCircle, MessageSquare, Wrench } from 'lucide-react'
 import type { InboxEntry, InboxKind } from '@shared/types'
 import { api, onEvent } from '@/lib/api'
 import { useApp } from '@/store/app'
@@ -10,7 +10,9 @@ import { Tooltip } from '@/components/ui/tooltip'
 const ICON: Record<InboxKind, typeof Bell> = {
   reply: MessageSquare,
   task: CalendarClock,
-  question: HelpCircle
+  question: HelpCircle,
+  // Not a message icon: pressing this row opens an interface, not a conversation.
+  tool: Wrench
 }
 
 /**

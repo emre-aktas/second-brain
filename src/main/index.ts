@@ -19,6 +19,7 @@ import { Scheduler } from './tasks/scheduler'
 import { AccountServers } from './agent/accountServers'
 import { configureToastIdentity, Notifier } from './notify'
 import { TrayController } from './tray'
+import { applyUnreadBadge } from './badge'
 import { trafficLightPosition } from '@shared/window-chrome'
 
 const log = createLogger('main')
@@ -126,7 +127,12 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  win.on('ready-to-show', () => win.show())
+  win.on('ready-to-show', () => {
+    win.show()
+    // A window created after the fact — on macOS, or after a crash — starts with the plain
+    // icon, so the mark has to be re-applied rather than assumed to have survived.
+    applyUnread()
+  })
 
   // Closed, not quit. The scheduled runs and the hourly check-in are the reason this app
   // exists at all, and an app that stops the moment its window is shut cannot do either.
@@ -189,7 +195,13 @@ async function bootstrap(): Promise<void> {
   // agent events, document changes and questions, and queueing covers the gap
   // before a freshly opened window is listening.
   broadcaster = new Broadcaster()
-  core.setBroadcast((channel, payload) => broadcaster!.send(channel, payload))
+  core.setBroadcast((channel, payload) => {
+    broadcaster!.send(channel, payload)
+    // Intercepted here rather than at each site that reports a change: there are four of
+    // them across `notify.ts`, `ipc.ts` and the notification click, and a fifth added later
+    // would otherwise leave the badge stale with nothing to notice it.
+    if (channel === 'inbox:changed') applyUnread()
+  })
 
   // Every line reaches an open log window as it is written, so the user can watch
   // a run happen rather than reading about it afterwards.
@@ -285,8 +297,16 @@ async function bootstrap(): Promise<void> {
   )
   tray.start()
 
+  // Whatever was left unread from a previous run is unread now.
+  applyUnread()
+
   notifier = new Notifier(core, agent, (sessionId, inboxId) => {
-    if (inboxId) core?.inbox.markRead(inboxId)
+    // Broadcast, not just written: reading an entry is what clears the badge, and this path
+    // marked it read without telling anyone — so clicking a notification left the dot on.
+    if (inboxId) {
+      core?.inbox.markRead(inboxId)
+      core?.broadcast('inbox:changed')
+    }
 
     // A click can arrive with the window hidden in the tray, minimised, or — on macOS,
     // which keeps the app alive with no windows at all — gone. `revealWindow` covers all
@@ -295,11 +315,23 @@ async function bootstrap(): Promise<void> {
 
     if (!sessionId) return
 
-    // A run that came from a tool belongs to the tool. Opening the archived chat behind it
-    // would show the user the plumbing instead of the interface they pressed a button in —
-    // and the tool is where the result was written.
-    const owningTool = core?.tools.bySession(sessionId)
-    if (owningTool) {
+    /*
+     * A run that came from a tool belongs to the tool, and there is no second answer.
+     *
+     * The chat behind it holds a generated prompt and a reply to it — the plumbing, not the
+     * interface the user pressed a button in, and the tool is where the result was written.
+     * So this returns either way: if the tool is gone, the click raises the window and stops
+     * rather than falling through and opening the chat, which is the one outcome the user
+     * asked never to see.
+     *
+     * Looked up through the *session*, which remembers its tool for ever. `tools.bySession`
+     * only knows the latest run, so a toast that sat in Action Center across two runs
+     * resolved to nothing and took the fall-through.
+     */
+    const owningToolId = core?.chat.toolIdFor(sessionId) ?? null
+    if (owningToolId) {
+      const owningTool = core?.tools.get(owningToolId)
+      if (!owningTool) return
       if (broadcaster && broadcaster.audience() > 0) {
         core?.broadcast('tools:activate', { toolId: owningTool.id, focusInput: false })
         return
@@ -349,6 +381,24 @@ async function bootstrap(): Promise<void> {
 
   if (!agent.available) {
     log.warn('claude CLI not found; the agent will be unavailable until it is installed')
+  }
+}
+
+/**
+ * Put the unread mark where it belongs, or take it away.
+ *
+ * Reads the count rather than being told it, so it cannot drift from the database — and it is
+ * cheap: one indexed COUNT against a table that is pruned.
+ */
+function applyUnread(): void {
+  if (!core) return
+  try {
+    const unread = core.inbox.unreadCount()
+    tray?.setUnread(unread > 0)
+    applyUnreadBadge(window, unread)
+  } catch (err) {
+    // A badge is not worth taking anything down for.
+    log.debug(`could not apply the unread badge: ${String(err)}`)
   }
 }
 

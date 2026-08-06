@@ -304,6 +304,41 @@ chat.setClaudeSessionId(session.id, 'claude-abc')
 check('claude session id stored', chat.getSession(session.id)?.claudeSessionId, 'claude-abc')
 check('total spend', chat.totalSpend(), 0.02)
 
+/* --------------------------------------------------- a tool's chat is not a chat */
+
+// A tool run's chat holds a generated prompt and the agent's answer to it. Listing it as a
+// conversation showed the user their own app talking to itself — the prompt rendered as if
+// they had typed it — and it is the one thing they asked never to see.
+{
+  const toolChat = chat.createSession('Rewriter — Aug 6, 14:20')
+  chat.attachTool(toolChat.id, 'tool-rewriter')
+  chat.addMessage({
+    sessionId: toolChat.id,
+    role: 'user',
+    blocks: [{ type: 'text', text: 'Rewrite the message below into three versions…' }],
+    ts: Date.now()
+  })
+
+  check('a tool chat knows its tool', chat.toolIdFor(toolChat.id), 'tool-rewriter')
+  check('an ordinary chat has no tool', chat.toolIdFor(session.id), null)
+  check(
+    'and it is not listed as a conversation',
+    chat.listSessions(50).some((s) => s.id === toolChat.id),
+    false
+  )
+  // Excluded because it belongs to a tool, not because it happens to be archived. Those are
+  // two different reasons and only one of them is permanent: `includeArchived` is what the
+  // history list would pass to show old conversations, and it must not surface these.
+  check(
+    'even when archived ones are asked for',
+    chat.listSessions(50, true).some((s) => s.id === toolChat.id),
+    false
+  )
+  // Still reachable directly, because the run has to be able to write to it.
+  check('but is still readable by id', chat.getSession(toolChat.id)?.title, 'Rewriter — Aug 6, 14:20')
+  check('and keeps its messages', chat.listMessages(toolChat.id).length, 1)
+}
+
 section('reopen from disk')
 /* ------------------------------------------------------------------- inbox */
 

@@ -15,6 +15,7 @@ import { app, BrowserWindow } from 'electron'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { appImage } from './appIcons'
 import { TrayController } from './tray'
 
 const OUT = process.env['CANVAS_PROBE_OUT'] ?? tmpdir()
@@ -81,6 +82,43 @@ async function main(): Promise<void> {
   // An app that says "still running" every single time is nagging; saying it once is the
   // only version of this that is neither silent nor irritating.
   check('but says nothing the second time', announcements.length === 1, announcements)
+
+  /* ------------------------------------------------------- the unread mark -- */
+
+  log('\nthe unread mark')
+  {
+    // Both variants have to exist, or the mark is silently nothing. `appImage` warns and
+    // returns an empty image, which would leave the tray unchanged and look like a bug in the
+    // inbox rather than a missing file.
+    const plain = appImage('icon.png')
+    const badged = appImage('tray-unread.png')
+    const windowBadged = appImage('icon-unread.png')
+
+    check('the plain icon loads', !plain.isEmpty())
+    check('the tray badge loads', !badged.isEmpty())
+    check('the window badge loads', !windowBadged.isEmpty())
+    // The whole point is that they are different pictures. Two files that happened to be
+    // identical would pass every other check here and show nothing.
+    check(
+      'and the badged tray icon is a different picture',
+      badged.toPNG().length !== plain.toPNG().length
+    )
+
+    // Through the controller, so what is exercised is the swap the app performs.
+    const before = tray.trayImageForTest()
+    tray.setUnread(true)
+    const after = tray.trayImageForTest()
+    check('turning it on changes the tray image', before !== after, { before, after })
+
+    tray.setUnread(false)
+    check('and turning it off puts the plain one back', tray.trayImageForTest() === before)
+
+    // Idempotent: `applyUnread` runs on every inbox change, which during a busy turn is
+    // often, and re-reading a PNG and re-setting an unchanged image each time is waste.
+    const settled = tray.trayImageForTest()
+    tray.setUnread(false)
+    check('setting the same state again is a no-op', tray.trayImageForTest() === settled)
+  }
 
   /* ------------------------------------------------------------ quitting -- */
 

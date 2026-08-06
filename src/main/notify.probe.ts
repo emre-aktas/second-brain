@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { toastChannelFor, toastIdentityFor } from './notify'
+import { announcementFor, toastChannelFor, toastIdentityFor } from './notify'
 
 let failures = 0
 
@@ -101,5 +101,54 @@ check(
   appId
 )
 
-console.log(failures === 0 ? '\nall identity checks passed' : `\n${failures} check(s) failed`)
+/* --------------------------------------------------------- what a toast is called */
+
+console.log('\nwhat a toast is called')
+
+const TOOL = { name: 'Rewriter' }
+const TASK = { name: 'Hourly check-in' }
+
+// The regression this pins: a tool's run announced as "Second Brain replied", which names
+// neither what ran nor where to read it — and pointed at an archived chat that is
+// deliberately never shown.
+check('a tool run is announced as the tool', announcementFor({ what: 'result', tool: TOOL, task: null }), {
+  title: 'Rewriter',
+  kind: 'tool'
+})
+check(
+  'and a question from one names the tool too',
+  announcementFor({ what: 'question', tool: TOOL, task: null }),
+  { title: 'Rewriter is asking', kind: 'tool' }
+)
+// The inbox kind decides the icon and, with it, what pressing the row does. A tool run must
+// never be filed as a reply, because a reply opens a conversation.
+check(
+  'a tool run is never filed as a reply',
+  (['result', 'question'] as const).every(
+    (what) => announcementFor({ what, tool: TOOL, task: null }).kind === 'tool'
+  ),
+  true
+)
+// A tool run *on a schedule* is both. The tool wins: the task has nothing to open, and the
+// answer was written into the interface.
+check(
+  'a scheduled tool run still opens the tool',
+  announcementFor({ what: 'result', tool: TOOL, task: TASK }),
+  { title: 'Rewriter', kind: 'tool' }
+)
+check('a plain scheduled run is the task', announcementFor({ what: 'result', tool: null, task: TASK }), {
+  title: 'Hourly check-in',
+  kind: 'task'
+})
+check(
+  'a question from a scheduled run stays a question',
+  announcementFor({ what: 'question', tool: null, task: TASK }),
+  { title: 'Hourly check-in is asking', kind: 'question' }
+)
+check('and an ordinary reply is unchanged', announcementFor({ what: 'result', tool: null, task: null }), {
+  title: 'Second Brain replied',
+  kind: 'reply'
+})
+
+console.log(failures === 0 ? '\nall notification checks passed' : `\n${failures} check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)

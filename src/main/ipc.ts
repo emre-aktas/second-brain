@@ -103,6 +103,11 @@ export function registerIpc(ctx: IpcContext): void {
     })
     const session = core.chat.createSession(`${tool.name} — ${stamp}`)
     core.chat.archiveSession(session.id, true)
+    // Both directions, and they answer different questions. The tool remembers its latest
+    // run, which is what a reopened window needs; the session remembers its tool for ever,
+    // which is what a notification about an *older* run needs — and what keeps every one of
+    // these out of the conversation list.
+    core.chat.attachTool(session.id, tool.id)
     core.tools.setSession(tool.id, session.id)
     return session.id
   }

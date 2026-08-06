@@ -995,7 +995,7 @@ export interface TaskRun {
   finishedAt: number | null
 }
 
-export type InboxKind = 'reply' | 'task' | 'question'
+export type InboxKind = 'reply' | 'task' | 'question' | 'tool'
 
 /**
  * One thing the app wanted to tell the user while they were away.

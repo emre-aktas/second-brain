@@ -394,6 +394,33 @@ const MIGRATIONS: Migration[] = [
       -- which is a flat graph the simulation then has to be pushed out of.
       ALTER TABLE nodes ADD COLUMN z REAL;
     `
+  },
+  {
+    version: 16,
+    name: 'tool-sessions',
+    up: `
+      -- Which tool a chat is the plumbing for, permanently.
+      --
+      -- \`saved_tools.session_id\` holds a tool's *latest* run, and each run gets a fresh chat,
+      -- so looking a session up there stops working the moment the next run starts: a
+      -- notification about run 3 clicked after run 4 began found nothing and opened the
+      -- archived chat instead of the tool. This is the durable direction of that relation,
+      -- and it is also what keeps these chats out of the conversation list — a generated
+      -- prompt and its reply are not a conversation the user had.
+      --
+      -- Deliberately not a foreign key: deleting a tool must not take its history with it,
+      -- and a session whose tool is gone is still not a conversation.
+      ALTER TABLE sessions ADD COLUMN tool_id TEXT;
+      CREATE INDEX idx_sessions_tool ON sessions(tool_id);
+
+      -- Backfill what can be known. \`saved_tools.session_id\` names each tool's most recent
+      -- run, which is the one a live toast could still be about; runs before it were never
+      -- recorded anywhere else and stay unmarked. They are archived, so they are absent from
+      -- the conversation list either way — this is about the notification path.
+      UPDATE sessions
+         SET tool_id = (SELECT t.id FROM saved_tools t WHERE t.session_id = sessions.id)
+       WHERE id IN (SELECT session_id FROM saved_tools WHERE session_id IS NOT NULL);
+    `
   }
 ]
 

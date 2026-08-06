@@ -244,6 +244,23 @@ export class AgentManager {
       ? (this.core.chat.getSession(options.sessionId) ?? this.core.chat.currentSession())
       : this.core.chat.currentSession()
 
+    /*
+     * Whether this turn belongs to a tool is a property of the chat, not of the call site.
+     *
+     * Derived rather than trusted, because forgetting to pass it is invisible and expensive:
+     * without it the generated prompt renders as a message the user wrote, the chat gets
+     * renamed to its first eighty characters, and the notification says "Second Brain
+     * replied" — three symptoms of one omission, which is exactly what happened. An explicit
+     * `toolRun` still wins, since it carries the values the run was given.
+     */
+    const owningToolId = this.core.chat.toolIdFor(session.id)
+    const owningTool = owningToolId ? this.core.tools.get(owningToolId) : undefined
+    const toolRun =
+      options.toolRun ??
+      (owningTool
+        ? { toolId: owningTool.id, toolName: owningTool.name, icon: owningTool.icon, values: {} }
+        : undefined)
+
     const capability = options.capability ?? this.core.settings.defaultCapability
     const runtime = this.ensureRuntime(
       session.id,
@@ -270,27 +287,25 @@ export class AgentManager {
       role: 'user',
       blocks: userBlocks,
       ts: Date.now(),
-      ...(options.toolRun ? { meta: { toolRun: options.toolRun } } : {}),
+      ...(toolRun ? { meta: { toolRun } } : {}),
       ...(options.taskRun ? { meta: { taskRun: options.taskRun } } : {})
     })
     this.emit({ type: 'message', sessionId: session.id, message: userMessage })
 
-    // First real message names the conversation. A tool run names it after the
-    // tool, since the generated prompt is not something the user wrote.
-    // A scheduled run's chat is already named after the task and the time it ran, so
-    // it is left alone — renaming it to the first eighty characters of the injected
-    // prompt would title every check-in "This is your hourly check-in. Nobody asked…".
-    if (!options.taskRun && this.core.chat.messageCount(session.id) === 1) {
-      this.core.chat.renameSession(
-        session.id,
-        options.toolRun?.toolName ?? text.slice(0, 80).replace(/\s+/g, ' ').trim()
-      )
+    // First real message names the conversation — when the user wrote it.
+    //
+    // A generated prompt must not. Both a scheduled run's chat and a tool run's are already
+    // named after what they run and when, and renaming either to the first eighty characters
+    // of the injected instructions is how every check-in came to be titled "This is your
+    // hourly check-in. Nobody asked…".
+    if (!options.taskRun && !toolRun && this.core.chat.messageCount(session.id) === 1) {
+      this.core.chat.renameSession(session.id, text.slice(0, 80).replace(/\s+/g, ' ').trim())
     }
 
     const payload = options.context ? `<context>\n${options.context}\n</context>\n\n${text}` : text
 
     runtime.lastActivity = Date.now()
-    runtime.activeToolRun = options.toolRun ? { toolId: options.toolRun.toolId } : null
+    runtime.activeToolRun = toolRun ? { toolId: toolRun.toolId } : null
     runtime.activeAction = options.toolAction ?? null
     // Stamped here rather than in the renderer: a scheduled run has no renderer watching
     // it, and the duration it records has to be the turn's, not the moment a window
