@@ -44,6 +44,17 @@ notarized by Apple**, so the first launch is blocked: right-click the app and ch
 xattr -dr com.apple.quarantine "/Applications/Second Brain.app"
 ```
 
+### Updates
+
+The installed Windows build keeps itself current. It checks for a new release a few hours at a
+time, and when there is one a marker appears in the footer; opening it shows what changed and
+one button downloads it, installs it and restarts the app. What's new is shown again on the way
+back up, so an update never happens without saying what it did.
+
+Two builds cannot replace themselves and are honest about it, offering the release page instead:
+the portable `.exe`, which has no installation to replace, and macOS, where the ad-hoc signature
+is one Squirrel.Mac refuses to update. Both still tell you a new version exists.
+
 ---
 
 ## What it does

@@ -46,6 +46,7 @@ const SUITE = [
   { file: 'src/main/expiry.probe.ts', mode: 'node' },
   { file: 'src/main/tasks.probe.ts', mode: 'node' },
   { file: 'src/main/notify.probe.ts', mode: 'node' },
+  { file: 'src/main/updater.probe.ts', mode: 'node' },
   { file: 'src/main/agent/usage-meter.test.ts', mode: 'node' },
   { file: 'src/main/kill.probe.ts', mode: 'node' },
   { file: 'src/main/agent/lifecycle.probe.ts', mode: 'node' },
@@ -61,6 +62,7 @@ const SUITE = [
   { file: 'src/main/windowSize.probe.ts', mode: 'gui' },
   { file: 'src/main/toolPreview.probe.ts', mode: 'gui' },
   { file: 'src/main/scheduleTimeline.probe.ts', mode: 'gui' },
+  { file: 'src/main/updateUi.probe.ts', mode: 'gui' },
 
   { file: 'src/main/agent/spawn.probe.ts', mode: 'cli' },
   { file: 'src/main/agent/flags.probe.ts', mode: 'cli' }

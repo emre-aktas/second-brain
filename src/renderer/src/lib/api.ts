@@ -31,6 +31,13 @@ export const api = {
   reportUserActivity: () => call('app:userActivity'),
   openExternal: (url: string) => call('app:openExternal', { url }),
 
+  /* updates */
+  updateStatus: () => call('update:status'),
+  checkForUpdate: () => call('update:check'),
+  installUpdate: () => call('update:install'),
+  openReleasePage: () => call('update:openRelease'),
+  whatsNew: () => call('update:whatsNew'),
+
   /* graph and notes */
   getGraph: () => call('graph:get'),
   getStats: () => call('graph:stats'),

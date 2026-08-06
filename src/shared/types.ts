@@ -1046,3 +1046,76 @@ export interface WorkspaceInfo {
   dbPath: string
   trashDir: string
 }
+
+/* ------------------------------------------------------------------- updates */
+
+/**
+ * Where this build can get an update from, and whether it can install one itself.
+ *
+ * Not every packaged copy can. A portable Windows build unpacks itself into a temp
+ * directory and runs from there, so there is no installation for an installer to replace;
+ * and the macOS build is ad-hoc signed, which Squirrel.Mac refuses to update because it
+ * validates the downloaded bundle's signature against the running one and an ad-hoc
+ * signature satisfies nothing. Both of those can still be *told* about a new version,
+ * which is worth far more than silence — hence 'manual' rather than 'off'.
+ *
+ * 'off' is a development run: there is no packaged app to replace.
+ */
+export type UpdateCapability = 'install' | 'manual' | 'off'
+
+/**
+ * Deliberately without a 'ready' state.
+ *
+ * A downloaded-but-not-installed update is a state this app never sits in: the press that
+ * starts the download is the press that agreed to the restart, so `installing` follows
+ * `downloading` directly. A phase nothing can produce is a branch in every reader that can
+ * never be right or wrong.
+ */
+export type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'installing'
+  | 'error'
+
+/**
+ * Everything the renderer needs to draw the update surface, in one object.
+ *
+ * One object rather than a handful of fields because the phases are exclusive and a
+ * renderer holding `downloading` alongside a stale `available` has to decide which it
+ * believes. Broadcast whole on every change.
+ */
+export interface UpdateStatus {
+  phase: UpdatePhase
+  capability: UpdateCapability
+  /** The version running now. */
+  currentVersion: string
+  /** The version on offer, when there is one. */
+  version: string | null
+  /** The release's own notes, markdown, as written for the release. */
+  notes: string | null
+  /** Where a human can read about it, for the builds that cannot install it themselves. */
+  releaseUrl: string | null
+  /** 0–100 while downloading. */
+  percent: number
+  /** Bytes per second, so a slow connection reads as slow rather than as stuck. */
+  bytesPerSecond: number
+  /** When the last check finished, successful or not. */
+  checkedAt: number | null
+  /** Set in the 'error' phase. Plain enough to show. */
+  message: string | null
+}
+
+/**
+ * What changed in the version now running, shown once after an update installs.
+ *
+ * Written before the app restarts to install, and read on the way back up — which is why
+ * it is stored rather than fetched: the notes belong to the update the user just accepted,
+ * and refetching them would depend on the network being there a second time.
+ */
+export interface WhatsNew {
+  version: string
+  notes: string
+  releaseUrl: string | null
+}

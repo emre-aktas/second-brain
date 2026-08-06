@@ -1,5 +1,7 @@
 import { app, BrowserWindow, Notification, shell } from 'electron'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { autoUpdater } from 'electron-updater'
 import { defaultWorkspaceRoot, ensureWorkspace, resolveAppPaths } from './paths'
 import { SettingsStore } from './settings'
 import { BrainCore } from './core'
@@ -19,6 +21,7 @@ import { Scheduler } from './tasks/scheduler'
 import { AccountServers } from './agent/accountServers'
 import { configureToastIdentity, Notifier } from './notify'
 import { TrayController } from './tray'
+import { UpdateController, updateCapabilityFor } from './updater'
 import { applyUnreadBadge } from './badge'
 import { trafficLightPosition } from '@shared/window-chrome'
 
@@ -37,6 +40,7 @@ let previewer: ToolPreviewer | null = null
 let scheduler: Scheduler | null = null
 let accountServers: AccountServers | null = null
 let notifier: Notifier | null = null
+let updater: UpdateController | null = null
 let broadcaster: Broadcaster | null = null
 let shuttingDown = false
 
@@ -269,6 +273,27 @@ async function bootstrap(): Promise<void> {
   // integrations panel should not each pay for their own health check of every server.
   accountServers = new AccountServers()
 
+  /*
+   * The updater.
+   *
+   * After `core`, because it writes the release notes into the kv table on the way out: the
+   * process that installs an update is not the process that reports it, so the notes have to
+   * be handed over through storage.
+   */
+  updater = new UpdateController({
+    engine: autoUpdater,
+    kv: core.kv,
+    currentVersion: app.getVersion(),
+    capability: updateCapabilityFor({
+      platform: process.platform,
+      packaged: app.isPackaged,
+      exePath: app.getPath('exe'),
+      tmpDir: tmpdir()
+    }),
+    broadcast: (status) => core?.broadcast('update:changed', status)
+  })
+  updater.start()
+
   scheduler = new Scheduler(core, agent, accountServers)
   scheduler.onChanged = () => core?.broadcast('tasks:changed')
 
@@ -359,6 +384,7 @@ async function bootstrap(): Promise<void> {
     shortcuts,
     previewer,
     scheduler,
+    updater,
     takePendingReveal,
     takePendingToolReveal,
     getWindow: () => window
@@ -416,6 +442,7 @@ function shutdown(): void {
     scheduler?.stop()
     tray?.stop()
     notifier?.stop()
+    updater?.stop()
     agent?.stop()
     integrations?.stop()
     core?.shutdown()

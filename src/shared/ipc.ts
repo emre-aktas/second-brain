@@ -22,6 +22,8 @@ import type {
   TaskRunResult,
   Settings,
   Suggestion,
+  UpdateStatus,
+  WhatsNew,
   WorkspaceInfo
 } from './types'
 import type { GenUiSpec } from './genui'
@@ -211,6 +213,28 @@ export interface ApiMap {
   'app:reindex': (payload: void) => IndexReportDto
   'app:userActivity': (payload: void) => void
   'app:openExternal': (payload: { url: string }) => void
+
+  /* updates */
+  'update:status': (payload: void) => UpdateStatus
+  /** Ask now. Returns the status it settled on, so a button can await its own answer. */
+  'update:check': (payload: void) => UpdateStatus
+  /**
+   * Fetch it and install it.
+   *
+   * One call for the whole thing, because it is one decision: the app downloads, quits,
+   * installs and comes back. Splitting it into download-then-install would put a second
+   * button in front of a user who has already said yes.
+   */
+  'update:install': (payload: void) => void
+  /** Open the release page, for the builds that cannot install an update themselves. */
+  'update:openRelease': (payload: void) => void
+  /**
+   * What changed in the version now running, or null.
+   *
+   * Answered once: reading it is what marks the version as seen, so a reload does not
+   * bring the dialog back.
+   */
+  'update:whatsNew': (payload: void) => WhatsNew | null
 
   /* graph and notes */
   'graph:get': (payload: void) => GraphSnapshot
@@ -418,6 +442,11 @@ export const API_CHANNELS: ApiChannel[] = [
   'app:reindex',
   'app:userActivity',
   'app:openExternal',
+  'update:status',
+  'update:check',
+  'update:install',
+  'update:openRelease',
+  'update:whatsNew',
   'graph:get',
   'graph:stats',
   'graph:savePositions',
@@ -516,6 +545,14 @@ export interface EventMap {
   'tools:changed': void
   /** Something landed in the inbox, or was read. */
   'inbox:changed': void
+  /**
+   * The update state changed.
+   *
+   * Broadcast whole rather than as a delta: the phases are exclusive, and a renderer
+   * holding `downloading` next to a stale `available` would have to decide which it
+   * believes. Sent on every transition, including download progress.
+   */
+  'update:changed': UpdateStatus
   /** A scheduled task was created, edited, or has just run. */
   'tasks:changed': void
   /**
@@ -568,6 +605,7 @@ export const EVENT_CHANNELS: EventChannel[] = [
   'tools:changed',
   'tasks:changed',
   'inbox:changed',
+  'update:changed',
   'chat:reveal',
   'tools:stateChanged',
   'tools:activate',

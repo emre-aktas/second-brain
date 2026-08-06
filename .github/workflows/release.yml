@@ -1,12 +1,18 @@
 name: Release
 
-# Tag a version to publish installers:
+# Publish a version, and hand it to every copy of the app that is already running.
 #
-#   git tag v0.1.0 && git push origin v0.1.0
+#   npm run release patch          bumps package.json, writes CHANGELOG.md, commits, tags
+#   git push origin main --follow-tags
 #
-# The macOS artifacts have to be built on a macOS runner — the .icns is generated
-# there and codesign only exists there — which is the reason this workflow exists at
-# all rather than someone building releases from one machine.
+# The tag is what starts this. It builds the installers, then publishes a release whose body is
+# the CHANGELOG section for that version — which is exactly what `electron-updater` serves back
+# to running copies as the release notes, so the text edited before pushing is the text the
+# user reads in the update dialog.
+#
+# The macOS artifacts have to be built on a macOS runner: the .icns is generated there and
+# codesign only exists there. That is the reason this is a workflow rather than something built
+# from one machine.
 on:
   push:
     tags: ['v*']
@@ -16,7 +22,40 @@ permissions:
   contents: write
 
 jobs:
+  # Before spending twenty minutes on two runners: the tag and package.json have to agree.
+  # They are two hands on one value — `npm run release` writes both — and a mismatch publishes
+  # a release the updater will never offer, because it compares against the version baked into
+  # the app rather than against the tag.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package.json is at $version"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tagged="${GITHUB_REF_NAME#v}"
+            if [ "$tagged" != "$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match package.json ($version)"
+              exit 1
+            fi
+          fi
+
+      # Fails the build rather than the release. A published release with an empty body shows
+      # every user "this release came without notes", and there is no fixing that after the
+      # fact without editing the release by hand.
+      - name: The release notes exist
+        run: node scripts/changelog.mjs "${{ steps.version.outputs.version }}"
+
   build:
+    needs: check
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +88,9 @@ jobs:
           # searching the keychain.
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      # `latest.yml` and the blockmaps are the update feed, not extras. Without the yml a
+      # running copy has nothing to compare itself against and the whole feature is silently
+      # dead; without the blockmaps every update is a full download rather than a delta.
       - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.os }}
@@ -56,42 +98,42 @@ jobs:
             release/*.exe
             release/*.dmg
             release/*.zip
+            release/*.blockmap
+            release/latest*.yml
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [check, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref_type == 'tag'
 
     steps:
+      # For scripts/changelog.mjs and the install boilerplate. The artifacts come from the
+      # build jobs; the notes come from the tree.
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
 
+      - name: Assemble the release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            node scripts/changelog.mjs "${{ needs.check.outputs.version }}"
+            cat .github/release-install.md
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          draft: true
-          # Drafted rather than published: the macOS build is unsigned, so the
-          # release notes need the Gatekeeper instructions attached before anyone
-          # downloads it and concludes the app is broken.
-          body: |
-            ## Install
-
-            **Windows** — download the `Setup` installer and run it.
-
-            **macOS** — download the `.dmg` for your chip (`arm64` for Apple
-            Silicon, `x64` for Intel) and drag the app to Applications.
-
-            This build is not notarized by Apple, so the first launch is blocked.
-            Right-click the app and choose **Open**, then confirm — once only. If
-            macOS still refuses, clear the quarantine flag:
-
-            ```
-            xattr -dr com.apple.quarantine "/Applications/Second Brain.app"
-            ```
-
-            ## Before it will do anything
-
-            Second Brain drives your own Claude subscription through the `claude`
-            CLI. Install it and sign in first: https://claude.com/claude-code
+          # Published, not drafted. A draft is invisible to `electron-updater` and to everyone
+          # else, so drafting one would mean the update never reaches anybody — which is the
+          # entire point of this workflow. The Gatekeeper instructions that used to justify
+          # drafting are in the body instead, under a heading the app's own notes parser cuts
+          # off before showing anything to a user who is not downloading by hand.
+          draft: false
+          body: ${{ steps.notes.outputs.body }}

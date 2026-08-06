@@ -13,6 +13,7 @@ import { StaleToolWriteError } from './db/tools'
 import type { ShortcutManager } from './shortcuts'
 import type { ToolPreviewer } from './toolPreview'
 import type { Scheduler } from './tasks/scheduler'
+import type { UpdateController } from './updater'
 import { formatHotkey, normaliseHotkey } from '@shared/hotkey'
 import { interpolate } from '@shared/bindings'
 import { claudeAuthStatus, claudeVersion, resolveClaudeBinary, runClaude } from './agent/claude'
@@ -40,6 +41,7 @@ export interface IpcContext {
   shortcuts: ShortcutManager
   previewer: ToolPreviewer
   scheduler: Scheduler
+  updater: UpdateController
   /**
    * A reveal that arrived before any window could hear it, collected once.
    *
@@ -76,7 +78,7 @@ export function openSessionIds(): string[] {
 }
 
 export function registerIpc(ctx: IpcContext): void {
-  const { core, agent, curator, integrations, scheduler } = ctx
+  const { core, agent, curator, integrations, scheduler, updater } = ctx
 
   /**
    * A tool's own conversation, created on first use.
@@ -522,6 +524,19 @@ export function registerIpc(ctx: IpcContext): void {
       }
       void shell.openExternal(url)
     },
+
+    /* ------------------------------------------------------------- updates */
+
+    'update:status': () => updater.current(),
+    'update:check': () => updater.check(),
+    // Not awaited on purpose: the whole point of this call is that the app is about to
+    // download, restart and come back, and the renderer follows it through `update:changed`
+    // rather than through a promise that resolves after the process is gone.
+    'update:install': () => {
+      void updater.install()
+    },
+    'update:openRelease': () => updater.openRelease(),
+    'update:whatsNew': () => updater.whatsNew(),
 
     /* -------------------------------------------------------- graph, notes */
 

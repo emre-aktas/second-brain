@@ -6,6 +6,17 @@ directories:
   buildResources: build
   output: release
 
+# Where a packaged copy looks for a new version.
+#
+# This is what bakes `app-update.yml` into the build; without it `autoUpdater` starts up and
+# fails with "publish configuration not found", which reads as the update feature being
+# broken rather than unconfigured. The release it finds must be *published* — electron-updater
+# does not see drafts, and neither does anyone running the app.
+publish:
+  provider: github
+  owner: emre-aktas
+  repo: second-brain
+
 files:
   - out/**
   - package.json
@@ -33,6 +44,15 @@ extraResources:
 asarUnpack:
   - '**/node_modules/node-sqlite3-wasm/**'
 
+# Artifact names carry no spaces, and that is a correctness requirement rather than taste.
+#
+# `latest.yml` — the update feed — names the installer with its spaces replaced by hyphens,
+# because that is what electron-builder's own GitHub publisher uploads. The release here is
+# assembled by a workflow instead, which uploads the file under its real name, and GitHub
+# replaces a space in an asset name with a dot. Feed says `Second-Brain-Setup...`, asset is
+# `Second.Brain-Setup...`, download 404s, and every copy of the app reports a failed update
+# with nothing in the log to explain it. `${name}` is the package name, which has no spaces,
+# so the feed and the asset are byte-identical.
 win:
   executableName: Second Brain
   icon: build/icon.ico
@@ -41,7 +61,7 @@ win:
       arch: [x64]
     - target: portable
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 
 mac:
   # Its own artwork rather than build/icon.png: macOS does not mask an app icon, so
@@ -77,10 +97,10 @@ mac:
       arch: [arm64, x64]
     - target: zip
       arch: [arm64, x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 
 dmg:
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
   title: ${productName} ${version}
   contents:
     - x: 140
@@ -98,9 +118,9 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Second Brain
-  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+  artifactName: ${name}-Setup-${version}-${arch}.${ext}
 
 portable:
-  artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+  artifactName: ${name}-Portable-${version}-${arch}.${ext}
 
 npmRebuild: false

@@ -22,6 +22,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel'
 import { NotePanel } from '@/components/panels/NotePanel'
 import { ActivityPanel, SettingsPanel } from '@/components/panels/SidePanels'
 import { ScheduledPanel } from '@/components/panels/ScheduledPanel'
+import { Updates } from '@/components/Updates'
 import { ToolsPanel } from '@/components/panels/ToolsPanel'
 import { ToolView } from '@/components/tools/ToolView'
 import { CommandPalette } from '@/components/CommandPalette'
@@ -412,6 +413,13 @@ function Shell(): React.JSX.Element {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {/*
+            A new version, if there is one. In the footer because there is nothing here the
+            user needs within the minute, and coloured because an update nobody notices is an
+            update nobody installs.
+          */}
+          <Updates />
+
           {/* Deliberately no cost figure: usage comes out of the signed-in Claude
               plan, and showing an equivalent dollar amount reads as a charge. */}
           {usage?.rateLimit && Date.now() - usage.rateLimit.at < 6 * 3600_000 && (

@@ -849,6 +849,12 @@ export function SettingsPanel(): React.JSX.Element {
                 <p className="mt-3 text-[11px] text-muted-foreground">
                   Second Brain {bootstrap.appVersion} · Electron {window.brain.versions.electron}
                 </p>
+                {/*
+                  A way to ask. The app checks on its own every few hours, which covers the
+                  case that matters — but "is there a new version?" is a question someone
+                  will want answered *now*, and with no button the honest answer is "wait".
+                */}
+                <UpdateCheck />
               </section>
             </>
           )}
@@ -997,6 +1003,49 @@ function RangeInput({
       />
       <span className="w-8 text-right text-[11px] tabular-nums text-muted-foreground">
         {format ? format(draft) : draft}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Check for a new version, by hand.
+ *
+ * Reports what it found rather than going quiet: "you are up to date" is the answer most
+ * presses deserve, and a button that acknowledges nothing is a button people press twice.
+ * The offer itself is `Updates` in the footer — this only starts the check, so there is one
+ * implementation of what an available update looks like.
+ */
+function UpdateCheck(): React.JSX.Element {
+  const [state, setState] = useState<'idle' | 'checking' | 'current' | 'found' | 'failed'>('idle')
+
+  const check = async (): Promise<void> => {
+    setState('checking')
+    try {
+      const status = await api.checkForUpdate()
+      if (status.phase === 'available') setState('found')
+      else if (status.phase === 'error') setState('failed')
+      else setState('current')
+    } catch {
+      setState('failed')
+    }
+  }
+
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <Button variant="secondary" size="sm" onClick={() => void check()} disabled={state === 'checking'}>
+        {state === 'checking' && <Spinner className="size-3" />}
+        Check for updates
+      </Button>
+      <span
+        className={cn(
+          'text-[11px]',
+          state === 'failed' ? 'text-destructive' : 'text-muted-foreground'
+        )}
+      >
+        {state === 'current' && 'Up to date'}
+        {state === 'found' && 'A new version is available — see the footer'}
+        {state === 'failed' && 'Could not reach the release feed'}
       </span>
     </div>
   )
