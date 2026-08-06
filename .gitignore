@@ -35,6 +35,10 @@ secrets.enc
 *.db-journal
 *.db-wal
 
+# Written by ICON_PREVIEW=1 npm run icons, to judge the icon at the sizes it is really
+# seen at. A working aid, regenerated on demand, and not something the build reads.
+/build/icon-preview.png
+
 # Third-party skills vendored for local development, and the lockfile pinning them.
 # Not ours to republish.
 .agents/
