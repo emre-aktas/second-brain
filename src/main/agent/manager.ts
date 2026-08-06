@@ -1,12 +1,14 @@
-import type { TurnFollowups,
+import type {
   AgentCapability,
   AgentEffort,
   AgentEvent,
   AgentTurnOptions,
   ChatBlock,
+  ChatImage,
   ChatMessage,
-  ChatImage
+  TurnFollowups
 } from '@shared/types'
+import type { TurnState } from '@shared/ipc'
 import type { GenUiSpec } from '@shared/genui'
 import { writePath } from '@shared/bindings'
 import type { BrainCore } from '../core'
@@ -344,6 +346,25 @@ export class AgentManager {
    * event: a process that has died, and one that reported a rate limit and is still
    * retrying. Killing the second aborts a turn that was going to succeed.
    */
+  /**
+   * What a session is doing, for a view that has just been opened onto it.
+   *
+   * Everything here already lives on the runtime; nothing new is tracked for it. The point
+   * is only that the renderer can *ask*, rather than being told once and having to remember.
+   */
+  turnState(sessionId: string): TurnState {
+    const runtime = this.runtimes.get(sessionId)
+    if (!runtime || !runtime.proc.isBusy) return { busy: false, startedAt: null, action: null }
+
+    return {
+      busy: true,
+      startedAt: runtime.turnStartedAt,
+      action: runtime.activeAction
+        ? { toolId: runtime.activeAction.toolId, label: runtime.activeAction.label }
+        : null
+    }
+  }
+
   isBusy(sessionId: string): boolean {
     return this.runtimes.get(sessionId)?.proc.isBusy ?? false
   }

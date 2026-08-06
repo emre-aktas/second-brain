@@ -71,6 +71,7 @@ export const api = {
   setCapability: (input: ApiPayload<'chat:setCapability'>) => call('chat:setCapability', input),
   getCapability: (sessionId: string) => call('chat:capability', { sessionId }),
   agentStatus: () => call('agent:status'),
+  turnState: (sessionId: string) => call('agent:turn', { sessionId }),
   budgetStatus: () => call('agent:budget'),
   usage: () => call('usage:get'),
 

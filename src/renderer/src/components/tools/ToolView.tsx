@@ -138,6 +138,14 @@ export function ToolView({
   const [missing, setMissing] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [chatOpen, setChatOpen] = useState(false)
+/**
+ * Stands in for the action id of a run this component did not start.
+ *
+ * A run restored on mount has no local record of which button began it, and main only knows
+ * the button's label when the run came from one at all — a `brain.run` from the tool's own
+ * code does not. The value is only ever compared against, never shown.
+ */
+const RESTORED_RUN = '__restored__'
   const [runningAction, setRunningAction] = useState<string | null>(null)
   /**
    * The session this tool's turns run in.
@@ -350,13 +358,27 @@ export function ToolView({
    * freeze?" is on screen even when the tool itself shows nothing.
    */
   const [runSeconds, setRunSeconds] = useState(0)
+  /**
+   * When the running turn began.
+   *
+   * A ref, and settable from outside, because a run restored on mount started before this
+   * component existed — captured locally, a reopened tool would count a turn that was two
+   * minutes old as being one second old.
+   */
+  const runStartedAtRef = useRef<number | null>(null)
   useEffect(() => {
     if (!runningAction) {
       setRunSeconds(0)
+      runStartedAtRef.current = null
       return
     }
-    const started = Date.now()
-    const timer = setInterval(() => setRunSeconds(Math.floor((Date.now() - started) / 1000)), 500)
+    const started = runStartedAtRef.current ?? Date.now()
+    runStartedAtRef.current = started
+    setRunSeconds(Math.max(0, Math.floor((Date.now() - started) / 1000)))
+    const timer = setInterval(
+      () => setRunSeconds(Math.max(0, Math.floor((Date.now() - started) / 1000))),
+      500
+    )
     return () => clearInterval(timer)
   }, [runningAction])
 
@@ -482,10 +504,27 @@ export function ToolView({
     let cancelled = false
     void api
       .toolSession(toolId)
-      .then(({ sessionId }) => {
+      .then(async ({ sessionId }) => {
         if (cancelled) return
         activeSessionRef.current = sessionId
         setSessionId(sessionId)
+
+        /*
+         * Pick up a run that is already going.
+         *
+         * The turn lives in the main process; everything this component knew about it was in
+         * refs that died with the last unmount. So closing a tool and reopening it showed an
+         * idle interface over a turn that was still working — and the result, when it landed,
+         * arrived from nowhere.
+         *
+         * Only the appearance is restored. The document write is main's job already, and the
+         * `result` handler calls `finishAction()` unconditionally, so a restored run clears
+         * itself when the turn ends rather than spinning for ever.
+         */
+        const state = await api.turnState(sessionId).catch(() => null)
+        if (cancelled || !state?.busy) return
+        runStartedAtRef.current = state.startedAt
+        setRunningAction(state.action?.label ?? RESTORED_RUN)
       })
       .catch(() => {
         /* the tool may have been deleted; `missing` covers that */

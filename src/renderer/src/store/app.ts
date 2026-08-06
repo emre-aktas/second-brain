@@ -301,7 +301,12 @@ export const useApp = create<AppState>((set, get) => ({
 
     // A notification clicked while the app was closed. Done after wireEvents so the
     // chat is already listening for the turn's events by the time it opens.
-    if (bootstrap.pendingReveal) {
+    if (bootstrap.pendingToolReveal) {
+      // A tool's run, so the tool opens rather than the archived chat behind it. Checked
+      // first: the two are mutually exclusive in main, and preferring the chat would show
+      // the plumbing to somebody who pressed a button in an interface.
+      set({ panel: 'tools', openToolId: bootstrap.pendingToolReveal })
+    } else if (bootstrap.pendingReveal) {
       await get().switchSession(bootstrap.pendingReveal)
       set({ panel: 'chat', openToolId: null })
     }

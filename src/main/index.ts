@@ -47,10 +47,18 @@ let shuttingDown = false
  * replay a stale reveal on the next launch.
  */
 let pendingReveal: string | null = null
+/** The same, for a notification about a tool's run: the tool is what should open. */
+let pendingToolReveal: string | null = null
 
 export function takePendingReveal(): string | null {
   const value = pendingReveal
   pendingReveal = null
+  return value
+}
+
+export function takePendingToolReveal(): string | null {
+  const value = pendingToolReveal
+  pendingToolReveal = null
   return value
 }
 
@@ -287,6 +295,19 @@ async function bootstrap(): Promise<void> {
 
     if (!sessionId) return
 
+    // A run that came from a tool belongs to the tool. Opening the archived chat behind it
+    // would show the user the plumbing instead of the interface they pressed a button in —
+    // and the tool is where the result was written.
+    const owningTool = core?.tools.bySession(sessionId)
+    if (owningTool) {
+      if (broadcaster && broadcaster.audience() > 0) {
+        core?.broadcast('tools:activate', { toolId: owningTool.id, focusInput: false })
+        return
+      }
+      pendingToolReveal = owningTool.id
+      return
+    }
+
     // A freshly created window has not finished loading, so a broadcast now would be
     // dropped. It is held for the renderer to collect on bootstrap instead — and held
     // *only* in that case, because a pending reveal that outlives its delivery would
@@ -307,6 +328,7 @@ async function bootstrap(): Promise<void> {
     previewer,
     scheduler,
     takePendingReveal,
+    takePendingToolReveal,
     getWindow: () => window
   })
 

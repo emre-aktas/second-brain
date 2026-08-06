@@ -339,6 +339,24 @@ export class ToolStore {
     })
   }
 
+  /**
+   * The tool whose latest run used this chat, if any.
+   *
+   * Lets a notification about a finished run open the *tool* rather than the archived chat
+   * behind it: the chat is plumbing, and the interface is what the user pressed a button in.
+   */
+  bySession(sessionId: string): SavedTool | undefined {
+    const id = this.db.pluck<string>('SELECT id FROM saved_tools WHERE session_id = ?', [
+      sessionId
+    ])
+    return id ? this.get(id) : undefined
+  }
+
+  /** Point a tool at a different chat. Used to give each run its own. */
+  setSession(id: string, sessionId: string): void {
+    this.db.run('UPDATE saved_tools SET session_id = ? WHERE id = ?', [sessionId, id])
+  }
+
   ensureSession(id: string, createSession: () => string): string {
     const tool = this.get(id)
     if (!tool) throw new Error(`no tool with id ${id}`)

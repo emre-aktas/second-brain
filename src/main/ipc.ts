@@ -47,6 +47,7 @@ export interface IpcContext {
    * reaching back the other way would be a require cycle in the CJS main bundle.
    */
   takePendingReveal: () => string | null
+  takePendingToolReveal: () => string | null
   getWindow: () => BrowserWindow | null
 }
 
@@ -93,12 +94,35 @@ export function registerIpc(ctx: IpcContext): void {
     maximized: tool.windowMaximized
   })
 
-  const toolSession = (tool: SavedTool): string =>
-    core.tools.ensureSession(tool.id, () => {
-      const session = core.chat.createSession(tool.name)
-      core.chat.archiveSession(session.id, true)
-      return session.id
+  const newToolSession = (tool: SavedTool): string => {
+    const stamp = new Date().toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     })
+    const session = core.chat.createSession(`${tool.name} — ${stamp}`)
+    core.chat.archiveSession(session.id, true)
+    core.tools.setSession(tool.id, session.id)
+    return session.id
+  }
+
+  /**
+   * The chat a tool's *next* turn runs in — a fresh one, every time.
+   *
+   * One chat per tool held one Claude session id, and `send` resumes it, so run N replayed
+   * runs 1..N-1: the context grew without limit and every press of a button cost more than
+   * the last. The same fix the scheduler needed, for the same reason. A new chat has no
+   * session id to resume, so the process starts clean.
+   *
+   * The tool still remembers its latest one, which is what a notification click and a
+   * reopened tool window need in order to find the run that is going on now.
+   */
+  const runSession = (tool: SavedTool): string => newToolSession(tool)
+
+  /** The chat a tool is *currently* attached to, without starting another. */
+  const currentToolSession = (tool: SavedTool): string =>
+    core.tools.ensureSession(tool.id, () => newToolSession(tool))
 
   // Probing the CLI spawns a process, so the result is cached for the session —
   // and awaited rather than run synchronously, because two CLI starts on the main
@@ -207,6 +231,7 @@ export function registerIpc(ctx: IpcContext): void {
   const handlers: Handlers = {
     /* ------------------------------------------------------------- system */
 
+    'agent:turn': ({ sessionId }) => agent.turnState(sessionId),
     'agent:budget': () => budgetStatus(),
 
     'usage:get': () => ctx.usage.snapshot(),
@@ -329,14 +354,14 @@ export function registerIpc(ctx: IpcContext): void {
     'tools:session': ({ id }) => {
       const tool = core.tools.get(id)
       if (!tool) throw new Error('that tool no longer exists')
-      return { sessionId: toolSession(tool) }
+      return { sessionId: currentToolSession(tool) }
     },
 
     'tools:ask': async ({ id, text }) => {
       const tool = core.tools.get(id)
       if (!tool) throw new Error('that tool no longer exists')
 
-      const sessionId = toolSession(tool)
+      const sessionId = runSession(tool)
 
       const context = [
         `You are working inside the user's "${tool.name}" tool (id ${tool.id}, kind ${tool.kind}).`,
@@ -381,7 +406,7 @@ export function registerIpc(ctx: IpcContext): void {
         ...inputs
       })
 
-      const sessionId = toolSession(tool)
+      const sessionId = runSession(tool)
 
       const context = [
         `You are running the "${action.label}" button inside the user's "${tool.name}" tool (id ${tool.id}, kind ${tool.kind}).`,
@@ -438,6 +463,7 @@ export function registerIpc(ctx: IpcContext): void {
       // Collected here, so a notification clicked while the app was closed still lands
       // on the right chat once the renderer is listening.
       pendingReveal: ctx.takePendingReveal(),
+      pendingToolReveal: ctx.takePendingToolReveal(),
       workspace: {
         root: core.paths.root,
         vaultDir: core.paths.vaultDir,

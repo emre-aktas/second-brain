@@ -84,6 +84,22 @@ export interface AccountServerDto {
 }
 
 /** A question the agent asked, waiting on the user inside a running turn. */
+/**
+ * What a session is doing right now.
+ *
+ * Asked on mount by anything that can be closed and reopened while a turn is still going —
+ * a tool window, most of all. The turn lives in the main process; a component that keeps its
+ * run state in a ref loses all of it on unmount and comes back looking idle over a turn
+ * that is still working.
+ */
+export interface TurnState {
+  busy: boolean
+  /** When the turn began, so a restored view can show the real elapsed time. */
+  startedAt: number | null
+  /** The tool button that started it, when one did. */
+  action: { toolId: string; label: string } | null
+}
+
 export interface PendingQuestion {
   id: string
   sessionId: string
@@ -130,6 +146,8 @@ export interface BootstrapPayload {
    * Cleared as it is read, so it cannot replay on a later launch.
    */
   pendingReveal: string | null
+  /** A tool to open, when the click that started the app was about a tool's run. */
+  pendingToolReveal: string | null
   budget: BudgetStatus
   workspace: WorkspaceInfo
   settings: Settings
@@ -238,6 +256,7 @@ export interface ApiMap {
   'chat:setCapability': (payload: { sessionId: string; capability: AgentCapability }) => void
   'chat:capability': (payload: { sessionId: string }) => AgentCapability
   'agent:status': (payload: void) => AgentStatus
+  'agent:turn': (payload: { sessionId: string }) => TurnState
   'agent:budget': (payload: void) => BudgetStatus
   'usage:get': (payload: void) => UsageSnapshotDto
 
@@ -419,6 +438,7 @@ export const API_CHANNELS: ApiChannel[] = [
   'chat:setCapability',
   'chat:capability',
   'agent:status',
+  'agent:turn',
   'agent:budget',
   'usage:get',
   'tasks:list',
