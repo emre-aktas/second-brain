@@ -15,6 +15,13 @@ files:
   - '!**/{test,__tests__,tests,powered-test,example,examples}'
   - '!**/*.{md,markdown}'
 
+# The tray reads this at runtime. `build/` is buildResources, which electron-builder uses
+# for installers and app icons but does not otherwise ship — without this the packaged app
+# has no tray icon, and no tray means the close button quits.
+extraResources:
+  - from: build/icon.png
+    to: icon.png
+
 # node-sqlite3-wasm resolves its .wasm relative to its own module directory,
 # so it must live outside the asar archive.
 asarUnpack:

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Notification, shell } from 'electron'
 import { join } from 'node:path'
 import { defaultWorkspaceRoot, ensureWorkspace, resolveAppPaths } from './paths'
 import { SettingsStore } from './settings'
@@ -18,11 +18,13 @@ import { createLogger, initLogger, onLogEntry } from './logger'
 import { Scheduler } from './tasks/scheduler'
 import { AccountServers } from './agent/accountServers'
 import { configureToastIdentity, Notifier } from './notify'
+import { TrayController } from './tray'
 import { trafficLightPosition } from '@shared/window-chrome'
 
 const log = createLogger('main')
 
 let window: BrowserWindow | null = null
+let tray: TrayController | null = null
 let core: BrainCore | null = null
 let agent: AgentManager | null = null
 let curator: Curator | null = null
@@ -64,11 +66,25 @@ if (!isPrimaryInstance) {
 // be privileged for a frame to load it.
 registerToolScheme()
 
-app.on('second-instance', () => {
-  if (!window) return
+/**
+ * Bring the window back, whatever state it is in.
+ *
+ * Three callers need this and they used to do it three ways: launching a second copy, a
+ * notification click, and the tray. Since closing the window now *hides* it, `focus()`
+ * alone is no longer enough — focusing a hidden window puts nothing on screen, which is
+ * how "clicking the icon does nothing" happens.
+ */
+function revealWindow(): void {
+  if (!window || window.isDestroyed()) {
+    window = createWindow()
+    return
+  }
   if (window.isMinimized()) window.restore()
+  window.show()
   window.focus()
-})
+}
+
+app.on('second-instance', revealWindow)
 
 /** The title strip the renderer draws, and the hole the native controls sit in. */
 const HEADER_HEIGHT = 38
@@ -103,6 +119,14 @@ function createWindow(): BrowserWindow {
   })
 
   win.on('ready-to-show', () => win.show())
+
+  // Closed, not quit. The scheduled runs and the hourly check-in are the reason this app
+  // exists at all, and an app that stops the moment its window is shut cannot do either.
+  // `TrayController` decides — it declines when there is no tray to hide into, so a system
+  // that refused to give us one still gets a window whose close button closes.
+  win.on('close', (event) => {
+    if (tray?.handleClose()) event.preventDefault()
+  })
 
   // Nothing in this app should navigate away or open a native window; links go
   // to the user's browser instead.
@@ -244,18 +268,22 @@ async function bootstrap(): Promise<void> {
   // Told about replies, proactive runs and questions so it can decide whether the
   // user needs to hear about them. It brings the app forward itself, because a toast
   // that raises a window but does not show what it was about is worse than none.
+  tray = new TrayController(
+    () => window,
+    revealWindow,
+    (title, body) => {
+      if (Notification.isSupported()) new Notification({ title, body }).show()
+    }
+  )
+  tray.start()
+
   notifier = new Notifier(core, agent, (sessionId, inboxId) => {
     if (inboxId) core?.inbox.markRead(inboxId)
 
-    // macOS keeps the app alive with no windows, so a click can arrive when there is
-    // nothing to reveal into. Recreating the window is the difference between the click
-    // working and doing nothing at all.
-    if (!window || window.isDestroyed()) window = createWindow()
-    else {
-      if (window.isMinimized()) window.restore()
-      window.show()
-      window.focus()
-    }
+    // A click can arrive with the window hidden in the tray, minimised, or — on macOS,
+    // which keeps the app alive with no windows at all — gone. `revealWindow` covers all
+    // three; anything less is a notification that does nothing when pressed.
+    revealWindow()
 
     if (!sessionId) return
 
@@ -314,6 +342,7 @@ function shutdown(): void {
     toolWindows?.closeAll()
     curator?.stop()
     scheduler?.stop()
+    tray?.stop()
     notifier?.stop()
     agent?.stop()
     integrations?.stop()
@@ -338,9 +367,10 @@ void app.whenReady().then(async () => {
     app.quit()
   }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) window = createWindow()
-  })
+  // Not "create one if there are none". Since a close now hides the window, the Dock icon
+  // is clicked with a window that exists and is invisible — counting windows finds one and
+  // does nothing, which looks exactly like the app having died.
+  app.on('activate', revealWindow)
 })
 
 app.on('window-all-closed', () => {
@@ -358,7 +388,12 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', shutdown)
+app.on('before-quit', () => {
+  // Told before the teardown, because tearing down closes the window and the close handler
+  // would otherwise hide it and cancel the quit — an app that cannot be quit at all.
+  tray?.markQuitting()
+  shutdown()
+})
 
 process.on('uncaughtException', (err) => {
   log.error('uncaught exception', err)

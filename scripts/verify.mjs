@@ -49,6 +49,7 @@ const SUITE = [
   { file: 'src/main/agent/lifecycle.probe.ts', mode: 'node' },
   { file: 'src/main/agent/bridge.probe.ts', mode: 'node' },
 
+  { file: 'src/main/tray.probe.ts', mode: 'gui' },
   { file: 'src/main/graphIcons.probe.ts', mode: 'gui' },
   { file: 'src/main/graph3d.probe.ts', mode: 'gui' },
   { file: 'src/main/canvasRender.probe.ts', mode: 'gui' },
