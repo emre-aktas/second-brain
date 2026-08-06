@@ -660,6 +660,14 @@ export function registerIpc(ctx: IpcContext): void {
 
     'tools:shortcutStates': () => ctx.shortcuts.list(),
 
+    'app:reportError': ({ kind, message, stack, where }) => {
+      // `error`, not `warn`: the renderer does not report things it has handled, so anything
+      // arriving here is a surface that failed to draw.
+      log.error(
+        `renderer ${kind}: ${message}${where ? ` (${where})` : ''}${stack ? `\n${stack}` : ''}`
+      )
+    },
+
     'tools:reportError': ({ id, message, stack, where }) => {
       recordToolError(id, { message, stack, where, at: Date.now() })
       const tool = core.tools.get(id)

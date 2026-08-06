@@ -1,4 +1,5 @@
 import { StrictMode } from 'react'
+import { captureRendererErrors } from '@/lib/errors'
 import { createRoot } from 'react-dom/client'
 import './styles/globals.css'
 import { App } from './App'
@@ -17,6 +18,9 @@ const previewMode = /[?&]preview=1/.test(window.location.hash)
 if (/[?&]light=1/.test(window.location.hash)) {
   document.documentElement.classList.remove('dark')
 }
+
+// Before the first render, so a failure during mount is recorded rather than lost.
+captureRendererErrors()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

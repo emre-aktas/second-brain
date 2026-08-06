@@ -104,6 +104,16 @@ function snapshot(): GraphSnapshot {
     if (c > 0) edges.push({ src: hubId, dst: `hub-${c - 1}`, kind: 'link', weight: 1 })
   }
 
+  // Inferred edges, which is what makes a real vault dense: 46 notes with 466 links is
+  // roughly ten per note, and nothing in this fixture reached that with wikilinks alone.
+  const noteIds = nodes.filter((n) => n.kind !== 'tag').map((n) => n.id)
+  for (const [i, src] of noteIds.entries()) {
+    for (let step = 1; step <= 9; step++) {
+      const dst = noteIds[(i + step * 3) % noteIds.length]
+      if (dst && dst !== src) edges.push({ src, dst, kind: 'similar', weight: 0.4 })
+    }
+  }
+
   for (const tag of ['thinking', 'client']) {
     push(`tag-${tag}`, tag, 'tag')
     for (let i = 0; i < 5; i++) {
@@ -163,16 +173,20 @@ const TOOL = {
   id: 'tool-1',
   name: 'Probe tool',
   description: 'Opened and closed, to see what the graph does about it.',
-  // `workbench` because only an *interactive* kind opens into the main area — a `prompt`
-  // tool has no surface to open, so it never unmounts the graph and would test nothing.
-  kind: 'workbench',
+  // `code`, which is the kind the bug was reported against: it loads a sandboxed frame over
+  // a custom protocol, so closing it tears down more than a React subtree. A `prompt` tool
+  // would test nothing at all, having no surface to open.
+  kind: 'code',
   instructions: '',
   sessionId: null,
   state: {},
   actions: [],
   fields: [],
   layout: [],
-  source: '',
+  source:
+    '<div id="board" style="padding:16px;font:14px system-ui">' +
+    '<h1>Board</h1><p>Enough of a document that the frame has something to lay out.</p>' +
+    '</div>',
   hotkey: null,
   openInWindow: false,
   alwaysOnTop: false,
@@ -527,7 +541,9 @@ async function main(): Promise<void> {
 
   log('\nopening a tool and closing it')
   {
-    const win = await open(true)
+    // Light, because that is where it was reported — and because the theme is resolved from
+    // CSS custom properties at mount, so it is not obviously the same code path in both.
+    const win = await open(false)
     const rect = await canvasRect(win)
     check('the canvas is there to begin with', rect !== null && rect.width > 400, rect)
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize, Minus, Plus } from 'lucide-react'
 import type { GraphSnapshot, NodeKind } from '@shared/types'
+import { api } from '@/lib/api'
 import {
   CameraTween,
   boundsOf,
@@ -240,6 +241,10 @@ export function GraphCanvas({
   const hasFramedRef = useRef(false)
   /** What the worker currently holds, for diffing the next snapshot against. */
   const previousRef = useRef<{ nodeIds: Set<string>; edgeKeys: Set<string> } | null>(null)
+  /** Pending check that the layout ever arrived. See the recovery in the snapshot effect. */
+  const recoverTimerRef = useRef<number | null>(null)
+  /** Set once a recovery has been attempted, so it cannot become a loop. */
+  const recoveredRef = useRef(false)
 
   const [hoverLabel, setHoverLabel] = useState<{ id: string; x: number; y: number } | null>(null)
   const [isEmpty, setIsEmpty] = useState(snapshot.nodes.length === 0)
@@ -435,18 +440,27 @@ export function GraphCanvas({
     const useDiff =
       diff !== null && churn > 0 && churn <= Math.max(24, snapshot.nodes.length * 0.3)
 
-    if (useDiff && diff) {
-      worker.postMessage({ type: 'update', ...diff } satisfies WorkerRequest)
-    } else if (churn > 0 || !previous) {
-      hasFramedRef.current = previous !== null ? hasFramedRef.current : false
-      worker.postMessage({
+    /** The whole graph, from scratch. Shared with the recovery below. */
+    const postInit = (): void => {
+      const target = workerRef.current
+      if (!target) return
+      target.postMessage({
         type: 'init',
         nodes: snapshot.nodes.map(toNodeInput),
         edges: snapshot.edges.map(toEdgeInput),
         settings: { linkDistance: settings.linkDistance, charge: settings.charge },
+        // Read at call time, not captured: a recovery two seconds later should use the size
+        // the window has then.
         width: viewportRef.current.width,
         height: viewportRef.current.height
       } satisfies WorkerRequest)
+    }
+
+    if (useDiff && diff) {
+      worker.postMessage({ type: 'update', ...diff } satisfies WorkerRequest)
+    } else if (churn > 0 || !previous) {
+      hasFramedRef.current = previous !== null ? hasFramedRef.current : false
+      postInit()
     } else if (diff && (diff.addEdges.length > 0 || diff.removeEdges.length > 0)) {
       // Only relations moved; nudge the layout without touching node identity.
       worker.postMessage({
@@ -459,6 +473,46 @@ export function GraphCanvas({
     }
 
     previousRef.current = { nodeIds: nextNodeIds, edgeKeys: new Set(nextEdgeKeys.keys()) }
+
+    /*
+     * A graph that never hears back asks again, once.
+     *
+     * The symptom this exists for is a canvas that paints its background and nothing else:
+     * the snapshot has nodes, the worker was sent them, and no positions ever arrived — so
+     * `viewCountRef` stays 0, the draw returns immediately, and it does so for ever. That is
+     * what "the graph disappeared after closing a tool" looked like, and it could not be
+     * reproduced here, so this is a recovery rather than a diagnosis: whatever stopped the
+     * first `init` from landing, sending it again is cheap and fixes the visible problem.
+     *
+     * Once, and it reports itself. A silent retry would paper over the fault instead of
+     * leaving a record that it happened — and the record is what a next attempt at the root
+     * cause will start from.
+     */
+    if (recoverTimerRef.current !== null) window.clearTimeout(recoverTimerRef.current)
+    recoverTimerRef.current = window.setTimeout(() => {
+      recoverTimerRef.current = null
+      if (recoveredRef.current || viewCountRef.current > 0 || snapshot.nodes.length === 0) return
+      recoveredRef.current = true
+
+      void api
+        .reportRendererError({
+          kind: 'graph',
+          message: `no layout arrived for ${snapshot.nodes.length} nodes; re-initialising`,
+          stack: null,
+          where: 'GraphCanvas'
+        })
+        .catch(() => undefined)
+
+      previousRef.current = null
+      hasFramedRef.current = false
+      postInit()
+    }, 2500)
+
+    return () => {
+      if (recoverTimerRef.current === null) return
+      window.clearTimeout(recoverTimerRef.current)
+      recoverTimerRef.current = null
+    }
     // Only the graph shape should reach the simulation here; force tuning is separate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot])

@@ -340,6 +340,19 @@ export interface ApiMap {
    * Kept so the agent can read its mistakes back from inspect_tool and fix them,
    * instead of the user having to describe a blank panel.
    */
+  /**
+   * Anything the renderer threw, for the app log.
+   *
+   * Separate from `tools:reportError`, which is about a *tool's* code and shows in that
+   * tool's own diagnostics. This one is the app failing.
+   */
+  'app:reportError': (payload: {
+    kind: string
+    message: string
+    stack: string | null
+    where: string | null
+  }) => void
+
   'tools:reportError': (payload: {
     id: string
     message: string
@@ -464,6 +477,7 @@ export const API_CHANNELS: ApiChannel[] = [
   'tools:setWindowPrefs',
   'tools:setModelPrefs',
   'tools:shortcutStates',
+  'app:reportError',
   'tools:reportError',
   'logs:tail',
   'logs:clear',
