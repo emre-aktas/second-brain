@@ -165,48 +165,6 @@ src/renderer/   React, Tailwind v4, shadcn/ui
   components/tools/   the sandboxed frame agent-written tools live in
 ```
 
-### Notable decisions
-
-**SQLite as WebAssembly.** `node-sqlite3-wasm` rather than `better-sqlite3`: it
-removes the Electron ABI rebuild step entirely, so dev and packaged builds run
-byte-identical engines and packaging needs no native toolchain. FTS5 and JSON1 are
-both present, and the driver sits behind one file if it ever needs swapping.
-
-**Filenames are composed to NFC, but only on macOS.** The same Turkish characters can
-be encoded two ways, and APFS may hand back either. Left alone, the index and the disk
-disagree about a name and every pass reports the note deleted and recreated. Windows
-returns exactly what was written, and NTFS matches bytes — so composing there would
-break opening the file instead of fixing anything.
-
-**The agent talks to the app over MCP.** The `claude` CLI is spawned with
-bidirectional `stream-json` and given a generated stdio MCP server that proxies to a
-localhost JSON API. stdio over an HTTP endpoint because it is the most universally
-supported transport; the bridge script is written at runtime so packaging needs no
-extra resources, and it runs under the Electron binary as a Node runtime so no
-separate Node install is required.
-
-**Capability tiers use a denylist.** `--tools` replaces the entire available tool set
-*including MCP tools*, which silently cuts the agent off from the app's own tools.
-`--disallowedTools` removes only what is named. Tiers are `read-only`, `curate` (the
-default) and `build`, which adds shell and file access and is opt-in per conversation.
-
-**Generated UI is a schema, not code.** The agent emits a spec validated by zod
-against 24 block types and the renderer maps each onto a component. No eval, no
-runtime compilation, always consistent with the design system. Validation errors come
-back with exact paths so the agent corrects itself.
-
-**Agent-written tools run in a frame that can reach nothing.** Served from a custom
-scheme with a policy that permits no network at all, sandboxed without
-`allow-same-origin` so it lands on an opaque origin with no storage and no way to
-touch the host document. The entire surface it gets is a handful of postMessage calls,
-which is what makes running arbitrary generated code safe. The contract is in
-[TOOL_API.md](TOOL_API.md).
-
-**Unprompted work has to earn its turn.** The hourly check-in runs a deterministic
-pre-check first — has anything actually changed? — and spends nothing when the answer
-is no. It separates events from standing conditions, so a note past its expiry is
-raised once rather than every hour for the rest of its life.
-
 ---
 
 ## Development
@@ -227,7 +185,15 @@ npm run dist:mac   # .dmg and .zip, arm64 and x64
 ```
 
 macOS artifacts have to be built on macOS — `.icns` generation and `codesign` only
-exist there. `.github/workflows/release.yml` builds both platforms on a tag.
+exist there. `.github/workflows/release.yml` builds both platforms on a tag, and
+`npm run release patch` is what makes the tag: it bumps the version, writes a
+`CHANGELOG.md` section from the commits since the last release, and commits both. Read
+what it wrote before pushing — the release body comes from it, and that body is what
+every running copy of the app shows as the release notes.
+
+```bash
+git push origin main --follow-tags
+```
 
 ### Verification
 
@@ -247,7 +213,6 @@ the picture is the point:
 ```bash
 node scripts/run-ts.mjs src/main/db/storage.test.ts --node
 node scripts/run-ts.mjs src/shared/schedule.test.ts --node        # schedule arithmetic
-node scripts/run-ts.mjs src/main/vault/unicode.test.ts --node     # NFC/NFD filenames
 node scripts/run-ts.mjs src/main/agent/lifecycle.probe.ts --node  # a stop vs. a crash
 node scripts/run-ts.mjs src/main/codeTool.probe.ts --gui          # tools, dark and light
 node scripts/run-ts.mjs src/main/agent/agent.probe.ts --node      # round trip, SPENDS USAGE
