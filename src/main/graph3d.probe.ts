@@ -469,11 +469,29 @@ async function main(): Promise<void> {
       return
     }
 
+    /*
+     * Both reasons rotation can legitimately be off, asked of the page itself.
+     *
+     * `reduce` is the one that actually bit: a CI runner reports
+     * `prefers-reduced-motion: reduce`, and `useReduceMotion` ORs that with the app's own
+     * setting — so rotation was correctly disabled and the check was asking a question the
+     * app had already answered no to. The frame count was my first guess and was wrong;
+     * the runners deliver 26 and 33 frames per 500ms quite happily. It is kept because it
+     * is the other way this check can become unrunnable, and because a number in the log
+     * is worth more than a theory.
+     */
     const frames = await framesPerHalfSecond(win)
-    log(`  animation frames in 500ms: ${frames}`)
-    if (frames < 8) {
-      // Not a failure. Rotation is one draw per frame, so a page that is not being given
-      // frames cannot be asked whether it turns — and on a headless runner it is not.
+    const reduced = Boolean(
+      await win.webContents.executeJavaScript(
+        `window.matchMedia('(prefers-reduced-motion: reduce)').matches`
+      )
+    )
+    log(`  animation frames in 500ms: ${frames}, prefers-reduced-motion: ${reduced}`)
+
+    if (reduced) {
+      // Not a failure — the opposite. Rotation is meant to be off here.
+      log('  skip  the graph turns on its own (this display asks for reduced motion)')
+    } else if (frames < 8) {
       log(`  skip  the graph turns on its own (the page gets ${frames} frames in 500ms)`)
     } else {
       const first = await shoot(win, rect)
