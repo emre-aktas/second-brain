@@ -35,7 +35,7 @@ const CHIP = [
   'inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-card/60',
   'px-2.5 py-1 text-[11.5px] text-muted-foreground',
   'transition-[color,background-color,border-color,transform] duration-150 ease-[var(--ease-out)]',
-  'hover:border-primary/40 hover:bg-accent hover:text-foreground active:scale-[0.97]',
+  'hover:border-primary/40 hover:bg-accent hover:text-foreground active:scale-[0.96]',
   'disabled:cursor-not-allowed disabled:opacity-50'
 ].join(' ')
 

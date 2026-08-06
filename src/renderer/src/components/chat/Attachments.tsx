@@ -73,7 +73,7 @@ export function AttachmentStrip({
       {images.map((image, index) => (
         <div
           key={index}
-          className="group relative size-14 overflow-hidden rounded-md border border-border bg-secondary"
+          className="group relative size-14 overflow-hidden rounded-md bg-secondary outline outline-1 -outline-offset-1 outline-[var(--image-outline)]"
         >
           <img
             src={`data:${image.mediaType};base64,${image.dataBase64}`}
@@ -123,7 +123,7 @@ export function AttachButton({
           aria-disabled={disabled}
           className={cn(
             'grid size-7 cursor-pointer place-items-center rounded-md text-muted-foreground',
-            'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.94]',
+            'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.96]',
             'hover:bg-accent hover:text-foreground',
             disabled && 'pointer-events-none opacity-50'
           )}

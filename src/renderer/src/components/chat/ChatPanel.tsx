@@ -428,7 +428,7 @@ function Suggestion({ text }: { text: string }): React.JSX.Element {
     <button
       type="button"
       onClick={() => void sendMessage(text)}
-      className="rounded-md border border-border/70 bg-secondary/25 px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-accent-foreground active:scale-[0.99]"
+      className="rounded-md border border-border/70 bg-secondary/25 px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-accent-foreground active:scale-[0.96]"
     >
       {text}
     </button>
@@ -549,7 +549,7 @@ function TurnView({
                           key={index}
                           src={`data:${image.mediaType};base64,${image.dataBase64}`}
                           alt={image.name ?? 'Attached image'}
-                          className="max-h-40 rounded-md border border-border/60 object-contain"
+                          className="max-h-40 rounded-md object-contain outline outline-1 -outline-offset-1 outline-[var(--image-outline)]"
                         />
                       ))}
                     </div>

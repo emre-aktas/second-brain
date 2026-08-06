@@ -68,6 +68,15 @@
   --sidebar: oklch(0.975 0.003 250);
   --sidebar-foreground: oklch(0.21 0.01 250);
   --sidebar-border: oklch(0.91 0.005 250);
+
+  /*
+   * The hairline on an image.
+   *
+   * Pure black here and pure white in dark, never a tinted neutral: a border built from the
+   * surface palette picks up that surface's hue and reads as dirt along the image edge. The
+   * image supplies its own colours, so the only honest outline is one made of nothing.
+   */
+  --image-outline: oklch(0 0 0 / 0.1);
 }
 
 .dark {
@@ -124,6 +133,7 @@
   --sidebar: oklch(0.175 0.011 265);
   --sidebar-foreground: oklch(0.93 0.006 265);
   --sidebar-border: oklch(0.27 0.014 265);
+  --image-outline: oklch(1 0 0 / 0.1);
 }
 
 /* ------------------------------------------------------------- theme bridge */

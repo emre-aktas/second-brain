@@ -96,7 +96,7 @@ export function TouchedNotes({
             className={cn(
               'group flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1',
               'text-[11.5px] transition-[background-color,border-color,transform] duration-150',
-              'ease-[var(--ease-out)] active:scale-[0.97]',
+              'ease-[var(--ease-out)] active:scale-[0.96]',
               gone
                 ? 'border-border bg-secondary/30 text-muted-foreground hover:border-destructive/40'
                 : 'border-primary/25 bg-primary/8 text-foreground hover:border-primary/50'

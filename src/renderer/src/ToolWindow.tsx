@@ -116,7 +116,7 @@ function Chrome({
             onClick={() => void api.openLogWindow()}
             className={cn(
               'app-no-drag grid size-7 place-items-center rounded-md text-muted-foreground',
-              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.94]',
+              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.96]',
               'hover:bg-accent hover:text-foreground'
             )}
           >
@@ -132,7 +132,7 @@ function Chrome({
             onClick={onTogglePin}
             className={cn(
               'app-no-drag grid size-7 place-items-center rounded-md',
-              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.94]',
+              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.96]',
               pinned
                 ? 'bg-primary/15 text-primary'
                 : 'text-muted-foreground hover:bg-accent hover:text-foreground'

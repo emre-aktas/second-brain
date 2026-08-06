@@ -347,7 +347,7 @@ function Shell(): React.JSX.Element {
                 type="button"
                 onClick={clearFocus}
                 aria-label="Stop focusing"
-                className="-mr-1 mt-px grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-foreground active:scale-[0.94]"
+                className="-mr-1 mt-px grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-foreground active:scale-[0.96]"
               >
                 <X className="size-3.5" />
               </button>
@@ -530,7 +530,7 @@ function PanelRail({
             onClick={() => onChange(entry.id)}
             className={cn(
               'relative grid size-7 place-items-center rounded-md',
-              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.94]',
+              'transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.96]',
               panel === entry.id
                 ? 'bg-accent text-accent-foreground'
                 : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'

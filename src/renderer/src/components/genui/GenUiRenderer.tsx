@@ -98,7 +98,7 @@ export function GenUi({
                     title: spec.title ?? 'Tool'
                   })
                 }
-                className="shrink-0 rounded-md p-1 text-muted-foreground transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-foreground active:scale-[0.94]"
+                className="shrink-0 rounded-md p-1 text-muted-foreground transition-[background-color,color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-foreground active:scale-[0.96]"
               >
                 <svg viewBox="0 0 16 16" className="size-3.5" fill="none" aria-hidden="true">
                   <path
@@ -796,7 +796,7 @@ function NodeRefsBlock({
             key={id}
             type="button"
             onClick={() => onOpenNode(id)}
-            className="group rounded-md border border-border bg-card px-2.5 py-2 text-left transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.99]"
+            className="group rounded-md border border-border bg-card px-2.5 py-2 text-left transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.96]"
           >
             <p className="truncate text-[13px] font-medium text-foreground">{node.title}</p>
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">

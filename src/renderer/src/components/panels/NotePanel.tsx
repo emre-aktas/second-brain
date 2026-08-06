@@ -270,7 +270,7 @@ export function NotePanel(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => openNode(other.id)}
-                      className="flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.99]"
+                      className="flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.96]"
                     >
                       {edge.src === node.id ? (
                         <ArrowRight className="mt-1 size-3 shrink-0 text-muted-foreground/70" />

@@ -1736,7 +1736,7 @@ function ControlButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-accent-foreground active:scale-[0.94]"
+      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-accent-foreground active:scale-[0.96]"
     >
       {children}
     </button>

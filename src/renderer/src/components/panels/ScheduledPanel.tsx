@@ -510,7 +510,7 @@ function RunHistory({ taskId }: { taskId: string }): React.JSX.Element {
               className={cn(
                 'flex w-full items-start gap-2 px-3 py-2 text-left',
                 'transition-[background-color,transform] duration-150 ease-[var(--ease-out)]',
-                gone ? 'cursor-default' : 'active:scale-[0.99] hover:bg-accent/50'
+                gone ? 'cursor-default' : 'active:scale-[0.96] hover:bg-accent/50'
               )}
             >
               <RunIcon run={run} />

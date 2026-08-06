@@ -638,7 +638,7 @@ export function PinnedToolStrip(): React.JSX.Element | null {
                   else if (tool.params.length === 0) void runTool(tool, {})
                   else setRunning(tool)
                 }}
-                className="flex items-center gap-1.5 rounded-full border border-border bg-secondary/50 px-2.5 py-1 text-[12px] text-foreground transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.97]"
+                className="flex items-center gap-1.5 rounded-full border border-border bg-secondary/50 px-2.5 py-1 text-[12px] text-foreground transition-[background-color,transform] duration-150 ease-[var(--ease-out)] hover:bg-accent active:scale-[0.96]"
               >
                 <Icon className="size-3.5 text-muted-foreground" />
                 {tool.name}
