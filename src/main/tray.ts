@@ -133,11 +133,16 @@ export class TrayController {
       if (image.isEmpty()) continue
 
       const size = process.platform === 'darwin' ? 18 : 20
-      const resized = image.resize({ width: size, height: size })
-      // Template images follow the menu bar's own light and dark, which is the only way an
-      // icon up there looks native on macOS.
-      if (process.platform === 'darwin') resized.setTemplateImage(true)
-      return resized
+      return image.resize({ width: size, height: size })
+      /*
+       * Not a template image, though that is the usual advice for macOS.
+       *
+       * A template image is a *mask*: macOS throws the colour away and re-tints by alpha, so
+       * it only works for artwork that is transparent except the glyph. This icon has its own
+       * opaque plate, which as a mask is a solid filled square — the menu bar would show a
+       * black block. Colour tray icons are perfectly normal, and the plate is what makes this
+       * one legible on a light menu bar and a dark one alike.
+       */
     }
 
     log.warn(`no tray icon found; looked in ${candidates.join(', ')}`)
