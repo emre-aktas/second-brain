@@ -863,6 +863,15 @@ export interface Settings {
     linkDistance: number
     charge: number
     labelThreshold: number
+    /**
+     * Whether node names are drawn at all.
+     *
+     * A privacy control, not a display preference: the graph is the home screen, so a share, a
+     * screenshot or somebody walking past shows every note title at once. Purely a draw
+     * parameter — the titles are still in the snapshot, so this hides them from the room rather
+     * than from the process, which is exactly what it is for.
+     */
+    showLabels: boolean
     /** Whether the graph turns on its own. Off leaves the orbit entirely to the user. */
     rotate: boolean
   }
@@ -1118,4 +1127,104 @@ export interface WhatsNew {
   version: string
   notes: string
   releaseUrl: string | null
+}
+
+/* -------------------------------------------------------------- integrations */
+
+/**
+ * Where an integration stands, as one word.
+ *
+ * Derived rather than stored: `enabled` plus whether every declared secret has a value is
+ * the whole of it, and a fourth state kept in the database could disagree with those two.
+ *
+ * `pending` is the state that had no name and therefore no surface. An integration the agent
+ * registered is saved disabled with secrets still to supply — the design intends the user to
+ * approve it — and with nothing calling it pending, it was reported by `list_integrations` as
+ * not existing at all.
+ */
+export type IntegrationStatus = 'pending' | 'disabled' | 'enabled'
+
+/**
+ * What is known about one declared secret, without its value.
+ *
+ * This is the shape that crosses into agent-visible space and into the renderer. There is no
+ * variant of it that carries the value: the renderer never needs one to draw a masked field,
+ * and the agent must never have one at all.
+ */
+export interface SecretState {
+  ref: string
+  label: string
+  hint?: string
+  isSet: boolean
+  /** True when the OS keychain protected it, rather than the fallback cipher. */
+  encrypted: boolean
+  updatedAt: number | null
+  /** Optional, set by the user for a short-lived token. */
+  expiresAt: number | null
+  /** Past its stated expiry. Computed here so every reader agrees on "expired". */
+  expired: boolean
+  /**
+   * Set for a *different* integration than the one asking about it.
+   *
+   * Refs are one flat namespace, so a manifest can declare a ref the user already filled in
+   * elsewhere — and it then reads as ready to enable without its author ever having asked for a
+   * credential. That is a legitimate case (two integrations against one service) and also the
+   * shape of a credential being borrowed by something the user did not vet, so it is reported
+   * rather than assumed either way.
+   */
+  borrowedFrom: string | null
+}
+
+/** One thing an integration can be asked to do, as the user needs to see it before approving. */
+export interface IntegrationOperationSummary {
+  name: string
+  description: string
+  /** Present for `rest`; absent for kinds whose operations are not HTTP. */
+  method?: string
+  path?: string
+  /** True for anything with outside-world effects. */
+  mutating: boolean
+}
+
+/**
+ * An integration as both the panel and `list_integrations` need it.
+ *
+ * One shape for both on purpose. They were two different reads of the same records — the panel
+ * took every record and the agent's list took only the enabled ones — which is how an
+ * integration could be simultaneously present and reported as non-existent.
+ */
+export interface IntegrationSummary {
+  id: string
+  name: string
+  description: string
+  kind: IntegrationKind
+  status: IntegrationStatus
+  createdBy: 'user' | 'agent' | 'preset'
+  health: IntegrationHealth
+  lastError: string | null
+  /** For `rest`, so the user can see what it will be allowed to reach. */
+  baseUrl: string | null
+  operations: IntegrationOperationSummary[]
+  secrets: SecretState[]
+  /** Refs still without a value. Empty means the integration is ready to be enabled. */
+  missingSecrets: string[]
+  /** True when every declared secret has a value. Enabling is gated on this. */
+  ready: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+/** One recorded call, for the audit trail. Never carries a secret value. */
+export interface IntegrationAuditEntry {
+  id: number
+  ts: number
+  integrationId: string
+  integrationName: string
+  operation: string
+  /** Which vault refs the call used. Refs, never values. */
+  secretRefs: string[]
+  ok: boolean
+  /** HTTP status for a `rest` call, null for the other kinds. */
+  httpStatus: number | null
+  durationMs: number
 }

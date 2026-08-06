@@ -2,9 +2,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
+  IntegrationAuditEntry,
   IntegrationHealth,
   IntegrationManifest,
   IntegrationRecord,
+  IntegrationSummary,
   IntegrationTool
 } from '@shared/types'
 import type { BrainCore } from '../core'
@@ -14,6 +16,8 @@ import { OAuthManager } from './oauth'
 import { McpHttpClient, McpStdioClient, type McpClient } from './mcp-client'
 import { RestAdapter, ScriptAdapter, type AdapterResult } from './adapters'
 import { validateManifest } from './validate'
+import { Redactor } from './redact'
+import { operationsOf, secretRefsOf, summaryFor } from './manifest'
 import { INTEGRATION_PRESETS } from './presets'
 import { createLogger } from '../logger'
 
@@ -44,6 +48,15 @@ export class IntegrationRegistry implements IntegrationBridge {
   private webhookServer: Server | null = null
   private webhookPort = 0
 
+  /**
+   * The backstop that keeps credentials out of agent-visible space.
+   *
+   * Reads the vault live rather than holding a snapshot: a token entered or rotated a moment
+   * ago has to be redactable immediately, which is exactly when the user is most likely to be
+   * triggering the failing request that would leak it.
+   */
+  private readonly redactor = new Redactor(() => this.secrets.values())
+
   constructor(private core: BrainCore) {
     this.secrets = new SecretVault(core.paths.secretsFile)
     this.oauth = new OAuthManager(this.secrets)
@@ -68,6 +81,24 @@ export class IntegrationRegistry implements IntegrationBridge {
 
   listRecords(): IntegrationRecord[] {
     return this.core.integrations.list()
+  }
+
+  /**
+   * Every integration, described the same way for the panel and for the agent.
+   *
+   * This replaces two separate reads that disagreed. `listTools` is still gated on `enabled` —
+   * a disabled integration must stay non-callable, and that was never the bug — but *knowing
+   * about* one is not the same as being able to call it, and conflating the two is what made a
+   * registered integration invisible to the tool that exists to list them.
+   */
+  describeAll(): IntegrationSummary[] {
+    const descriptors = this.secrets.refs()
+    return this.listRecords().map((record) => summaryFor(record, descriptors))
+  }
+
+  describe(id: string): IntegrationSummary | undefined {
+    const record = this.core.integrations.get(id)
+    return record ? summaryFor(record, this.secrets.refs()) : undefined
   }
 
   get webhookBaseUrl(): string {
@@ -108,6 +139,23 @@ export class IntegrationRegistry implements IntegrationBridge {
     const record = this.core.integrations.get(id)
     if (!record) throw new Error(`no integration "${id}"`)
 
+    /*
+     * Enabling is gated on every declared credential being present.
+     *
+     * Refused here rather than in the panel, because the panel is not the only caller and a
+     * rule enforced only at the surface is a rule that holds until the next caller. An
+     * integration enabled without its token is worse than one left disabled: it reaches the
+     * agent's tool list, gets called, and fails inside a turn the user is waiting on.
+     */
+    if (enabled) {
+      const summary = summaryFor(record, this.secrets.refs())
+      if (!summary.ready) {
+        throw new Error(
+          `${record.manifest.name} still needs ${summary.missingSecrets.join(', ')} before it can be enabled.`
+        )
+      }
+    }
+
     this.core.integrations.upsert({ ...record.manifest, enabled })
     this.invalidate(id)
     this.core.recordActivity({
@@ -138,15 +186,59 @@ export class IntegrationRegistry implements IntegrationBridge {
     this.core.broadcast('integrations:changed')
   }
 
-  setSecret(ref: string, value: string): void {
-    this.secrets.set(ref, value)
+  setSecret(ref: string, value: string, expiresAt?: number | null, setFor?: string | null): void {
+    this.secrets.set(ref, value, expiresAt, setFor)
     // A newly supplied credential can change health, so drop cached tools.
     this.toolCache.clear()
     this.core.broadcast('integrations:changed')
   }
 
+  /**
+   * Forget a credential.
+   *
+   * Anything it was enabling goes back to pending, which has to happen in the same breath: a
+   * deleted token with the integration left enabled is an integration that will fail on its
+   * next call, inside somebody's turn.
+   */
+  deleteSecret(ref: string): void {
+    this.secrets.delete(ref)
+    this.toolCache.clear()
+
+    for (const record of this.listRecords()) {
+      const declared = (record.manifest.requiredSecrets ?? []).some((s) => s.ref === ref)
+      if (!declared || !record.manifest.enabled) continue
+      this.core.integrations.upsert({ ...record.manifest, enabled: false })
+      this.invalidate(record.manifest.id)
+      log.info(`disabled ${record.manifest.id}: its credential "${ref}" was removed`)
+    }
+
+    this.core.broadcast('integrations:changed')
+  }
+
+  setSecretExpiry(ref: string, expiresAt: number | null): void {
+    this.secrets.setExpiry(ref, expiresAt)
+    this.core.broadcast('integrations:changed')
+  }
+
+  /**
+   * Reveal one value, for the user and only on request.
+   *
+   * The single path by which a stored value re-enters the renderer, and it exists because a
+   * pasted token is unverifiable otherwise — the user cannot tell a truncated paste from a
+   * correct one behind a row of dots. It is never called during a render: the panel asks for it
+   * when a button is pressed and forgets it when the field closes.
+   */
+  revealSecret(ref: string): string | null {
+    return this.secrets.get(ref) ?? null
+  }
+
   listSecretRefs(): { ref: string; encrypted: boolean; updatedAt: number }[] {
     return this.secrets.refs()
+  }
+
+  /** Refs whose values are too short to redact reliably, so the panel can say so. */
+  weakSecretRefs(): string[] {
+    return this.redactor.weak()
   }
 
   /* ---------------------------------------------------------------- oauth */
@@ -341,14 +433,128 @@ export class IntegrationRegistry implements IntegrationBridge {
       result = { content: `${integrationId}.${toolName} failed: ${message}`, isError: true }
     }
 
+    const durationMs = Date.now() - started
+
+    /*
+     * Redacted on the way out, once, at the boundary.
+     *
+     * Every branch above can carry a credential without anyone having decided to put one
+     * there — an error body that echoes the token back, an exception whose message contains a
+     * URL with a key in its query string. Doing it here rather than in each adapter means a
+     * new adapter is covered the day it is written rather than the day someone remembers.
+     */
+    result = { ...result, content: this.redactor.text(result.content) }
+
+    // Refs, never values. See `integration_audit` in the schema: there is no column a value
+    // could be written into.
+    const secretRefs = secretRefsOf(record.manifest)
+    try {
+      this.core.integrationAudit.record({
+        integrationId,
+        operation: toolName,
+        secretRefs,
+        ok: !result.isError,
+        httpStatus: result.httpStatus ?? null,
+        durationMs
+      })
+    } catch (err) {
+      // An audit write must not take the call down with it, but it must be visible.
+      log.warn('could not record an integration call in the audit trail', err)
+    }
+
     this.core.recordActivity({
       kind: 'integration.call',
       actor: `integration:${integrationId}`,
       title: `${record.manifest.name} → ${toolName}`,
-      detail: { tool: toolName, ok: !result.isError, durationMs: Date.now() - started }
+      detail: { tool: toolName, ok: !result.isError, durationMs }
     })
 
     return result
+  }
+
+  /** The audit trail, newest first. `id` omitted means every integration. */
+  auditTrail(id: string | null, limit = 50): IntegrationAuditEntry[] {
+    const names = new Map(this.listRecords().map((r) => [r.manifest.id, r.manifest.name]))
+    return this.core.integrationAudit.list(id, limit).map((entry) => ({
+      ...entry,
+      integrationName: names.get(entry.integrationId) ?? entry.integrationId
+    }))
+  }
+
+  /**
+   * One live authenticated request, and what the server said.
+   *
+   * Separate from `test`, which enumerates operations and — for a REST manifest — never leaves
+   * the machine. That distinction is the whole point: `test` answers "is this manifest coherent"
+   * and this answers "does the credential the user just pasted actually work", which is the
+   * question they are asking when they press the button.
+   */
+  async probe(id: string): Promise<{ ok: boolean; message: string; httpStatus: number | null }> {
+    const record = this.core.integrations.get(id)
+    if (!record) return { ok: false, message: `no integration "${id}"`, httpStatus: null }
+
+    const summary = summaryFor(record, this.secrets.refs())
+    if (!summary.ready) {
+      return {
+        ok: false,
+        message: `Still missing ${summary.missingSecrets.join(', ')}.`,
+        httpStatus: null
+      }
+    }
+
+    if (record.manifest.kind !== 'rest') {
+      // The other kinds have no single cheap authenticated request: an MCP server proves itself
+      // by connecting, which is what `test` already does.
+      const fallback = await this.test(id)
+      return { ...fallback, httpStatus: null }
+    }
+
+    const started = Date.now()
+    const result = await new RestAdapter(record.manifest, this.secrets, this.oauth).probe()
+    const detail = this.redactor.text(result.detail)
+
+    this.core.integrations.setHealth(
+      id,
+      result.ok ? 'ok' : result.status === 401 || result.status === 403 ? 'needs-auth' : 'error',
+      result.ok ? null : detail.slice(0, 300) || result.statusText || 'the request failed',
+      operationsOf(record.manifest).length
+    )
+
+    try {
+      this.core.integrationAudit.record({
+        integrationId: id,
+        operation: '(connection test)',
+        secretRefs: secretRefsOf(record.manifest),
+        ok: result.ok,
+        httpStatus: result.status,
+        durationMs: Date.now() - started
+      })
+    } catch (err) {
+      log.warn('could not record the connection test in the audit trail', err)
+    }
+
+    this.core.broadcast('integrations:changed')
+
+    if (result.status === null) {
+      return { ok: false, message: `Could not reach ${result.target}: ${detail}`, httpStatus: null }
+    }
+
+    // Said as the status plus what it means, because "HTTP 404" alone reads as a failure and
+    // here it is the opposite: the credential was accepted and the probe path is simply not a
+    // resource.
+    const meaning = result.ok
+      ? result.status === 404
+        ? 'the credential was accepted (404 only means the probe path is not a resource)'
+        : 'the credential works'
+      : result.status === 401 || result.status === 403
+        ? 'the credential was rejected'
+        : 'the service answered with an error'
+
+    return {
+      ok: result.ok,
+      message: `HTTP ${result.status} ${result.statusText} on ${result.target} — ${meaning}${detail ? `\n${detail.slice(0, 300)}` : ''}`,
+      httpStatus: result.status
+    }
   }
 
   /* ------------------------------------------------------------- register */

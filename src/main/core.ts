@@ -13,7 +13,14 @@ import { Db } from './db/sqlite'
 import { migrate } from './db/schema'
 import { EdgeStore, NodeStore, type SearchHit, type SearchOptions } from './db/nodes'
 import { GraphStore } from './db/graph'
-import { ActivityStore, IntegrationStore, KvStore, SuggestionStore, type ActivityInput } from './db/meta'
+import {
+  ActivityStore,
+  IntegrationAuditStore,
+  IntegrationStore,
+  KvStore,
+  SuggestionStore,
+  type ActivityInput
+} from './db/meta'
 import { ChatStore } from './db/chat'
 import { TaskRunStore, TaskStore } from './db/tasks'
 import { InboxStore } from './db/inbox'
@@ -69,6 +76,7 @@ export class BrainCore {
   readonly activity: ActivityStore
   readonly suggestions: SuggestionStore
   readonly integrations: IntegrationStore
+  readonly integrationAudit: IntegrationAuditStore
   readonly kv: KvStore
   readonly chat: ChatStore
   readonly tools: ToolStore
@@ -96,6 +104,7 @@ export class BrainCore {
     this.activity = new ActivityStore(this.db)
     this.suggestions = new SuggestionStore(this.db)
     this.integrations = new IntegrationStore(this.db)
+    this.integrationAudit = new IntegrationAuditStore(this.db)
     this.kv = new KvStore(this.db)
     this.chat = new ChatStore(this.db)
     this.tools = new ToolStore(this.db)

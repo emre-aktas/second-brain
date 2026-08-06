@@ -111,6 +111,8 @@ export class AgentManager {
         },
         focusGraph: (nodeIds, opts) =>
           this.core.broadcast('graph:focus', { nodeIds, note: opts.note ?? null, depth: opts.depth ?? 0 }),
+        focusIntegration: (integrationId) =>
+          this.core.broadcast('integrations:focus', { integrationId }),
         probeGraph: (nodeIds, label) => {
           if (nodeIds.length === 0) return
           // Capped: a search that returns fifty nodes should read as a sweep, not

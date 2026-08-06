@@ -421,6 +421,33 @@ const MIGRATIONS: Migration[] = [
          SET tool_id = (SELECT t.id FROM saved_tools t WHERE t.session_id = sessions.id)
        WHERE id IN (SELECT session_id FROM saved_tools WHERE session_id IS NOT NULL);
     `
+  },
+  {
+    version: 17,
+    name: 'integration-audit',
+    up: `
+      -- Every call an integration made, and which credential it used.
+      --
+      -- Its own table rather than a row in \`activity\`: activity is the user-visible feed of
+      -- what happened to their notes, and a line per HTTP request would drown it. This is a
+      -- trail you go looking for — "what did that token get used for" — and the answer has to
+      -- exist even when nobody was watching.
+      --
+      -- \`secret_refs\` is a JSON array of vault *refs*. There is deliberately no column a
+      -- value could be written into: the schema is the last place this rule can be enforced,
+      -- and a nullable \`secret_value\` would eventually be filled in by someone debugging.
+      CREATE TABLE integration_audit (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts             INTEGER NOT NULL,
+        integration_id TEXT NOT NULL,
+        operation      TEXT NOT NULL,
+        secret_refs    TEXT NOT NULL DEFAULT '[]',
+        ok             INTEGER NOT NULL,
+        http_status    INTEGER,
+        duration_ms    INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX idx_integration_audit_ts ON integration_audit(integration_id, ts DESC);
+    `
   }
 ]
 

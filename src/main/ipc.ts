@@ -717,9 +717,24 @@ export function registerIpc(ctx: IpcContext): void {
     },
     'integrations:test': ({ id }) => integrations.test(id),
     'integrations:authorize': ({ id }) => integrations.authorize(id),
-    'integrations:setSecret': ({ ref, value }) => {
-      integrations.setSecret(ref, value)
+    'integrations:summaries': () => integrations.describeAll(),
+    'integrations:setSecret': ({ ref, value, expiresAt, setFor }) => {
+      integrations.setSecret(ref, value, expiresAt ?? null, setFor ?? null)
     },
+    'integrations:deleteSecret': ({ ref }) => {
+      integrations.deleteSecret(ref)
+    },
+    'integrations:setSecretExpiry': ({ ref, expiresAt }) => {
+      integrations.setSecretExpiry(ref, expiresAt)
+    },
+    // Logged as an event, without the value. A reveal is the one moment a stored credential is
+    // on screen, and "was it ever shown, and when" is worth being able to answer.
+    'integrations:revealSecret': ({ ref }) => {
+      log.info(`revealed the value of secret "${ref}" to the user`)
+      return integrations.revealSecret(ref)
+    },
+    'integrations:probe': ({ id }) => integrations.probe(id),
+    'integrations:audit': ({ id, limit }) => integrations.auditTrail(id ?? null, limit ?? 50),
     'integrations:secretRefs': () => integrations.listSecretRefs(),
     'integrations:call': ({ id, tool, args }) => integrations.callTool(id, tool, args),
 

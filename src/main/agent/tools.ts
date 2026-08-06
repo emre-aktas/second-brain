@@ -2,6 +2,7 @@ import type { TurnFollowups,
   BrainNode,
   EdgeKind,
   IntegrationManifest,
+  IntegrationSummary,
   NodeKind,
   SavedTool,
   SuggestionKind,
@@ -29,9 +30,23 @@ export interface IntegrationBridge {
   listTools(): Promise<
     { integrationId: string; integrationName: string; qualifiedName: string; description: string; mutating: boolean }[]
   >
+  /**
+   * Every integration, including the ones that cannot be called yet.
+   *
+   * Separate from `listTools` on purpose, and both are needed: `listTools` answers "what can I
+   * invoke right now" and is correctly empty for a disabled integration, while this answers
+   * "what exists". Reporting only the first is what made a registered integration invisible.
+   */
+  describeAll(): IntegrationSummary[]
   callTool(integrationId: string, tool: string, args: Record<string, unknown>): Promise<ToolResult>
   register(manifest: unknown): Promise<{ ok: boolean; message: string; needsApproval: boolean }>
   test(integrationId: string): Promise<{ ok: boolean; message: string }>
+  /** One live authenticated request. See `probe` in the registry. */
+  probe(integrationId: string): Promise<{ ok: boolean; message: string; httpStatus: number | null }>
+  setEnabled(integrationId: string, enabled: boolean): unknown
+  deleteSecret(ref: string): void
+  setSecretExpiry(ref: string, expiresAt: number | null): void
+  remove(integrationId: string): void
 }
 
 export interface ToolDeps {
@@ -40,6 +55,13 @@ export interface ToolDeps {
   emitGenUi: (spec: GenUiSpec, sessionId: string | null) => string
   /** Drive the main graph canvas. */
   focusGraph: (nodeIds: string[], opts: { note?: string; depth?: number }) => void
+  /**
+   * Open the Integrations panel at one integration.
+   *
+   * The agent's answer to the one field it must never fill: it cannot write a credential, so it
+   * puts the user in front of the box instead and says what goes in it.
+   */
+  focusIntegration: (integrationId: string) => void
   /** Offer the user a next step. Attached to the turn's message when it finishes. */
   suggestFollowups: (followups: TurnFollowups, sessionId: string | null) => void
   /**
@@ -1946,23 +1968,83 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
         'Every connected tool and the callable operations it exposes. Check here before telling the user something cannot be done.',
       inputSchema: { type: 'object', properties: {} },
       handler: async () => {
-        const tools = await deps.integrations.listTools()
-        if (tools.length === 0) {
+        /*
+         * Two lists, because there are two states worth knowing about and only one of them is
+         * callable.
+         *
+         * This used to report the callable ones alone, which meant an integration the agent had
+         * just registered — saved disabled by design, waiting on a credential only the user can
+         * supply — came back as "No integrations are connected yet". The agent would then either
+         * register it a second time or tell the user the thing was impossible, while the record
+         * sat in storage passing its own tests. Being unable to call something is not a reason to
+         * deny it exists.
+         */
+        const [tools, summaries] = await Promise.all([
+          deps.integrations.listTools(),
+          Promise.resolve(deps.integrations.describeAll())
+        ])
+
+        if (summaries.length === 0) {
           return ok(
-            'No integrations are connected yet. You can build one: see register_integration.'
+            'No integrations are registered yet. You can build one: see register_integration.'
           )
         }
 
-        const grouped = new Map<string, string[]>()
-        for (const tool of tools) {
-          const list = grouped.get(tool.integrationName) ?? []
-          list.push(`    ${tool.qualifiedName}${tool.mutating ? ' [changes data]' : ''} — ${tool.description}`)
-          grouped.set(tool.integrationName, list)
+        const sections: string[] = []
+
+        /* ------------------------------------------------------------- callable */
+
+        if (tools.length > 0) {
+          const grouped = new Map<string, string[]>()
+          for (const tool of tools) {
+            const list = grouped.get(tool.integrationName) ?? []
+            list.push(
+              `    ${tool.qualifiedName}${tool.mutating ? ' [changes data]' : ''} — ${tool.description}`
+            )
+            grouped.set(tool.integrationName, list)
+          }
+          sections.push(
+            'Connected and callable:',
+            [...grouped.entries()].map(([name, lines]) => `  ${name}:\n${lines.join('\n')}`).join('\n')
+          )
         }
 
-        return ok(
-          [...grouped.entries()].map(([name, lines]) => `  ${name}:\n${lines.join('\n')}`).join('\n')
-        )
+        /* -------------------------------------------------------- not callable yet */
+
+        const waiting = summaries.filter((summary) => summary.status !== 'enabled')
+        if (waiting.length > 0) {
+          const lines = waiting.map((summary) => {
+            const bits = [
+              `  ${summary.name} (${summary.id}) — ${summary.kind}, ${summary.status}, added by ${summary.createdBy}`
+            ]
+            if (summary.baseUrl) bits.push(`    base URL: ${summary.baseUrl}`)
+            if (summary.operations.length > 0) {
+              bits.push(
+                `    ${summary.operations.length} operation(s): ${summary.operations
+                  .map((op) => op.name)
+                  .join(', ')}`
+              )
+            }
+            // The refs, so the agent can tell the user precisely what to go and fetch. Refs and
+            // labels only — there is no path by which this tool sees a value.
+            if (summary.missingSecrets.length > 0) {
+              bits.push(`    still needs: ${summary.missingSecrets.join(', ')}`)
+            }
+            const expired = summary.secrets.filter((secret) => secret.expired).map((s) => s.ref)
+            if (expired.length > 0) {
+              bits.push(`    past its stated expiry: ${expired.join(', ')}`)
+            }
+            return bits.join('\n')
+          })
+
+          sections.push(
+            'Registered but not callable — the user has to act on these in the Integrations panel:',
+            lines.join('\n'),
+            'Do not try to call these, and do not register them again. Tell the user what to supply and where to get it.'
+          )
+        }
+
+        return ok(sections.join('\n\n'))
       }
     },
     {
@@ -2017,7 +2099,8 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
     },
     {
       name: 'test_integration',
-      description: 'Check that an integration connects and can list its operations.',
+      description:
+        'Make one real authenticated request to an integration and report what the service said, including the HTTP status. Use this to confirm a credential actually works after the user has entered it.',
       inputSchema: {
         type: 'object',
         properties: { integrationId: { type: 'string' } },
@@ -2026,8 +2109,120 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
       handler: async (args) => {
         const id = str(args, 'integrationId')
         if (!id) return fail('integrationId is required')
-        const result = await deps.integrations.test(id)
+        /*
+         * `probe`, not `test`.
+         *
+         * `test` enumerates the manifest's own operations and, for a REST integration, never
+         * leaves the machine — so it reported success for a Figma integration with no token at
+         * all. An agent told "it connects" by something that never connected will tell the user
+         * the same thing.
+         */
+        const result = await deps.integrations.probe(id)
         return result.ok ? ok(result.message) : fail(result.message)
+      }
+    },
+    {
+      name: 'manage_integration',
+      description:
+        [
+          'Change an integration on the user\'s behalf: turn it off, forget a credential, record',
+          'or clear an expiry date, remove it, or open the Integrations panel at it so the user',
+          'can paste something.',
+          '',
+          'Two things are deliberately not here. You cannot write a credential value — that is',
+          'the user\'s to enter, and there is no tool for it anywhere. And you cannot *enable* an',
+          'integration: enabling is what makes it callable by you, so it needs a human press.',
+          'Use open_panel to put the user in front of the right card, and say what to paste.'
+        ].join(' '),
+      inputSchema: {
+        type: 'object',
+        properties: {
+          integrationId: { type: 'string' },
+          action: {
+            type: 'string',
+            enum: ['disable', 'forget_secret', 'set_expiry', 'clear_expiry', 'remove', 'open_panel'],
+            description: 'What to do.'
+          },
+          secretRef: {
+            type: 'string',
+            description: 'Required for forget_secret, set_expiry and clear_expiry.'
+          },
+          expiresAt: {
+            type: 'string',
+            description: 'ISO date for set_expiry, e.g. 2026-08-20. Read as the end of that day.'
+          }
+        },
+        required: ['integrationId', 'action']
+      },
+      mutating: true,
+      handler: async (args) => {
+        const id = str(args, 'integrationId')
+        const action = str(args, 'action')
+        if (!id || !action) return fail('integrationId and action are required')
+
+        const summary = deps.integrations.describeAll().find((entry) => entry.id === id)
+        if (!summary) return fail(`no integration "${id}"`)
+
+        const ref = str(args, 'secretRef')
+        const declared = new Set(summary.secrets.map((secret) => secret.ref))
+
+        switch (action) {
+          case 'disable':
+            deps.integrations.setEnabled(id, false)
+            return ok(`${summary.name} is off. Nothing will call it until the user turns it back on.`)
+
+          case 'forget_secret': {
+            if (!ref) return fail('secretRef is required for forget_secret')
+            if (!declared.has(ref)) {
+              return fail(`${summary.name} does not declare "${ref}". It declares: ${[...declared].join(', ') || 'nothing'}`)
+            }
+            deps.integrations.deleteSecret(ref)
+            return ok(
+              `Forgot "${ref}". ${summary.name} is back to pending, so it can no longer be called until the user enters it again.`
+            )
+          }
+
+          case 'set_expiry': {
+            if (!ref) return fail('secretRef is required for set_expiry')
+            if (!declared.has(ref)) return fail(`${summary.name} does not declare "${ref}"`)
+            const raw = str(args, 'expiresAt')
+            if (!raw) return fail('expiresAt is required for set_expiry')
+            const parsed = new Date(raw)
+            if (Number.isNaN(parsed.getTime())) return fail(`"${raw}" is not a date I can read`)
+            // End of the stated day, so a 7-day token is not reported dead from its own morning.
+            parsed.setHours(23, 59, 59, 999)
+            deps.integrations.setSecretExpiry(ref, parsed.getTime())
+            return ok(`"${ref}" is recorded as expiring ${parsed.toDateString()}. The panel warns once it passes.`)
+          }
+
+          case 'clear_expiry': {
+            if (!ref) return fail('secretRef is required for clear_expiry')
+            if (!declared.has(ref)) return fail(`${summary.name} does not declare "${ref}"`)
+            deps.integrations.setSecretExpiry(ref, null)
+            return ok(`"${ref}" no longer has an expiry date.`)
+          }
+
+          case 'remove':
+            deps.integrations.remove(id)
+            return ok(`Removed ${summary.name}, along with the credentials belonging to it.`)
+
+          case 'open_panel':
+            deps.focusIntegration(id)
+            return ok(
+              [
+                `Opened the Integrations panel at ${summary.name}.`,
+                summary.missingSecrets.length > 0
+                  ? `It is waiting for: ${summary.secrets
+                      .filter((secret) => !secret.isSet)
+                      .map((secret) => `${secret.label} (${secret.ref})`)
+                      .join(', ')}. Tell the user exactly where to get each one.`
+                  : 'Everything it needs is already there.'
+              ].join(' ')
+            )
+
+          default:
+            return fail(`unknown action "${action}"`)
+        }
       }
     }
   ]

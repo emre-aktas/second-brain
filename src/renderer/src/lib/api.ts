@@ -152,7 +152,16 @@ export const api = {
   removeIntegration: (id: string) => call('integrations:remove', { id }),
   testIntegration: (id: string) => call('integrations:test', { id }),
   authorizeIntegration: (id: string) => call('integrations:authorize', { id }),
-  setSecret: (ref: string, value: string) => call('integrations:setSecret', { ref, value }),
+  listIntegrationSummaries: () => call('integrations:summaries'),
+  setSecret: (ref: string, value: string, expiresAt?: number | null, setFor?: string | null) =>
+    call('integrations:setSecret', { ref, value, expiresAt, setFor }),
+  deleteSecret: (ref: string) => call('integrations:deleteSecret', { ref }),
+  setSecretExpiry: (ref: string, expiresAt: number | null) =>
+    call('integrations:setSecretExpiry', { ref, expiresAt }),
+  revealSecret: (ref: string) => call('integrations:revealSecret', { ref }),
+  probeIntegration: (id: string) => call('integrations:probe', { id }),
+  integrationAudit: (id?: string | null, limit?: number) =>
+    call('integrations:audit', { id, limit }),
   listSecretRefs: () => call('integrations:secretRefs'),
   callIntegration: (input: ApiPayload<'integrations:call'>) => call('integrations:call', input)
 }

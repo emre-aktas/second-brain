@@ -10,7 +10,9 @@ import type {
   EdgeKind,
   GraphSnapshot,
   GraphStats,
+  IntegrationAuditEntry,
   IntegrationRecord,
+  IntegrationSummary,
   IntegrationTool,
   NeighborhoodResult,
   NodeKind,
@@ -401,7 +403,50 @@ export interface ApiMap {
   'integrations:remove': (payload: { id: string }) => void
   'integrations:test': (payload: { id: string }) => { ok: boolean; message: string }
   'integrations:authorize': (payload: { id: string }) => { ok: boolean; message: string }
-  'integrations:setSecret': (payload: { ref: string; value: string }) => void
+  /**
+   * One description of every integration, for the panel.
+   *
+   * The same derivation `list_integrations` reports from. The panel used to read raw records and
+   * work out status for itself, which is how it and the agent came to disagree about whether a
+   * registered integration existed.
+   */
+  'integrations:summaries': (payload: void) => IntegrationSummary[]
+  'integrations:setSecret': (payload: {
+    ref: string
+    value: string
+    /** Milliseconds since the epoch, or null for a credential with no stated expiry. */
+    expiresAt?: number | null
+    /**
+     * The integration whose card the user was looking at.
+     *
+     * Recorded with the value because refs are one flat namespace: a later manifest can declare
+     * a ref that is already filled in and read as ready to enable without ever having asked for
+     * anything. Knowing who it was entered for is what lets that be shown rather than assumed.
+     */
+    setFor?: string | null
+  }) => void
+  'integrations:deleteSecret': (payload: { ref: string }) => void
+  'integrations:setSecretExpiry': (payload: { ref: string; expiresAt: number | null }) => void
+  /**
+   * The stored value, for the user, on an explicit press.
+   *
+   * The only path by which a value re-enters the renderer, and it is never called during a
+   * render — the panel asks when a button is pressed and drops it when the field closes. Not
+   * reachable by agent-authored code: that runs in a sandboxed frame whose entire surface is a
+   * handful of postMessage calls, not this API.
+   */
+  'integrations:revealSecret': (payload: { ref: string }) => string | null
+  /**
+   * One live authenticated request. Distinct from `integrations:test`, which for a REST
+   * integration never leaves the machine and therefore says nothing about the credential.
+   */
+  'integrations:probe': (payload: { id: string }) => {
+    ok: boolean
+    message: string
+    httpStatus: number | null
+  }
+  /** What this integration has been asked to do, and with which credential. Refs, never values. */
+  'integrations:audit': (payload: { id?: string | null; limit?: number }) => IntegrationAuditEntry[]
   'integrations:secretRefs': (payload: void) => SecretRefDto[]
   'integrations:call': (payload: {
     id: string
@@ -520,7 +565,13 @@ export const API_CHANNELS: ApiChannel[] = [
   'integrations:remove',
   'integrations:test',
   'integrations:authorize',
+  'integrations:summaries',
   'integrations:setSecret',
+  'integrations:deleteSecret',
+  'integrations:setSecretExpiry',
+  'integrations:revealSecret',
+  'integrations:probe',
+  'integrations:audit',
   'integrations:secretRefs',
   'integrations:call',
   'integrations:accountServers',
@@ -553,6 +604,13 @@ export interface EventMap {
    * believes. Sent on every transition, including download progress.
    */
   'update:changed': UpdateStatus
+  /**
+   * Open the Integrations panel at one integration.
+   *
+   * The agent cannot write a credential — there is no tool for it — so this is how it does the
+   * next best thing: put the user in front of the right card with the field open.
+   */
+  'integrations:focus': { integrationId: string }
   /** A scheduled task was created, edited, or has just run. */
   'tasks:changed': void
   /**
@@ -606,6 +664,7 @@ export const EVENT_CHANNELS: EventChannel[] = [
   'tasks:changed',
   'inbox:changed',
   'update:changed',
+  'integrations:focus',
   'chat:reveal',
   'tools:stateChanged',
   'tools:activate',

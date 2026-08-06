@@ -1,6 +1,7 @@
 import type { Db } from './sqlite'
 import type {
   ActivityEntry,
+  IntegrationAuditEntry,
   IntegrationHealth,
   IntegrationManifest,
   IntegrationRecord,
@@ -337,5 +338,95 @@ export class KvStore {
       value: parseJson<unknown>(r.v, null),
       updatedAt: r.updated_at
     }))
+  }
+}
+
+/* -------------------------------------------------------- integration audit */
+
+/**
+ * Which integration did what, and with which credential.
+ *
+ * Written for every call, successful or not, because the failures are the interesting half:
+ * "this token was used nine times and refused every time" is the shape of a leaked or expired
+ * credential, and it is invisible if only successes are recorded.
+ *
+ * Refs, never values. `IntegrationAuditEntry` has no field for one and neither does the table.
+ */
+export class IntegrationAuditStore {
+  constructor(private db: Db) {}
+
+  /** Enough to answer "what has this been doing lately" without becoming a second database. */
+  private static readonly KEEP = 2000
+
+  record(entry: {
+    integrationId: string
+    operation: string
+    secretRefs: string[]
+    ok: boolean
+    httpStatus?: number | null
+    durationMs: number
+  }): void {
+    this.db.run(
+      `INSERT INTO integration_audit
+         (ts, integration_id, operation, secret_refs, ok, http_status, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        Date.now(),
+        entry.integrationId,
+        entry.operation,
+        JSON.stringify(entry.secretRefs),
+        entry.ok ? 1 : 0,
+        entry.httpStatus ?? null,
+        Math.max(0, Math.round(entry.durationMs))
+      ]
+    )
+  }
+
+  /** Newest first. `integrationId` omitted means every integration. */
+  list(integrationId: string | null, limit = 50): Omit<IntegrationAuditEntry, 'integrationName'>[] {
+    const rows = integrationId
+      ? this.db.all<{
+          id: number
+          ts: number
+          integration_id: string
+          operation: string
+          secret_refs: string
+          ok: number
+          http_status: number | null
+          duration_ms: number
+        }>(
+          'SELECT * FROM integration_audit WHERE integration_id = ? ORDER BY ts DESC LIMIT ?',
+          [integrationId, limit]
+        )
+      : this.db.all<{
+          id: number
+          ts: number
+          integration_id: string
+          operation: string
+          secret_refs: string
+          ok: number
+          http_status: number | null
+          duration_ms: number
+        }>('SELECT * FROM integration_audit ORDER BY ts DESC LIMIT ?', [limit])
+
+    return rows.map((row) => ({
+      id: row.id,
+      ts: row.ts,
+      integrationId: row.integration_id,
+      operation: row.operation,
+      secretRefs: parseJson<string[]>(row.secret_refs, []),
+      ok: row.ok === 1,
+      httpStatus: row.http_status,
+      durationMs: row.duration_ms
+    }))
+  }
+
+  /** Bounded, like every other append-only table here. */
+  prune(): void {
+    this.db.run(
+      `DELETE FROM integration_audit
+        WHERE id NOT IN (SELECT id FROM integration_audit ORDER BY ts DESC LIMIT ?)`,
+      [IntegrationAuditStore.KEEP]
+    )
   }
 }

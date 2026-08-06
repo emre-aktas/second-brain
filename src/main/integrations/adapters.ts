@@ -19,6 +19,15 @@ const log = createLogger('adapters')
 export interface AdapterResult {
   content: string
   isError?: boolean
+  /**
+   * The HTTP status, for a `rest` call that reached the server.
+   *
+   * Carried as a number rather than left inside the prose because two readers need it: the
+   * audit trail records it, and "Test connection" has to distinguish a rejected credential
+   * (401) from a path that does not exist (404) — which are the same string to a human
+   * skimming an error and opposite answers to "does my token work".
+   */
+  httpStatus?: number
 }
 
 const MAX_RESULT_CHARS = 24_000
@@ -111,11 +120,14 @@ export class RestAdapter {
       if (!res.ok) {
         return {
           content: `${op.name} failed with HTTP ${res.status} ${res.statusText}\n${text.slice(0, 2000)}`,
-          isError: true
+          isError: true,
+          // Carried as a number so the audit trail records it and the caller does not have to
+          // parse it back out of the prose above.
+          httpStatus: res.status
         }
       }
 
-      return { content: truncate(this.shapeResponse(op, text)) }
+      return { content: truncate(this.shapeResponse(op, text)), httpStatus: res.status }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.warn(`REST call ${this.manifest.id}.${toolName} failed`, err)
@@ -205,6 +217,80 @@ export class RestAdapter {
         return
       }
     }
+  }
+
+  /**
+   * One live authenticated request, to prove the credential works.
+   *
+   * The existing `test` for a REST integration never left the machine: it enumerated the
+   * manifest's own operations and reported success, which is why a Figma integration with no
+   * token at all "succeeded and listed all three operations". Saving a secret and being told it
+   * was saved says nothing about whether the service accepts it, and a token that is wrong is
+   * indistinguishable from one that is right until something fails hours later.
+   *
+   * The target is the first operation that needs no arguments, because an operation with a
+   * required path parameter cannot be probed without inventing one — and an invented file key
+   * returns 404, which would read as a broken credential. With no such operation the base URL
+   * itself is requested, with auth applied: the status still separates "rejected" from
+   * "reached", which is the whole question.
+   */
+  async probe(): Promise<{
+    ok: boolean
+    status: number | null
+    statusText: string
+    detail: string
+    target: string
+  }> {
+    const candidate = this.manifest.operations.find(
+      (op) =>
+        op.method === 'GET' &&
+        !op.mutating &&
+        ![...(op.pathParams ?? []), ...(op.query ?? [])].some((param) => param.required)
+    )
+
+    try {
+      const { url, init } = candidate
+        ? await this.buildRequest(candidate, {})
+        : await this.baseRequest()
+
+      const res = await fetch(url, init)
+      const body = await res.text()
+
+      // 401 and 403 are the credential being refused. Everything else that came back at all
+      // means the request was accepted as authenticated — including 404, which says the path
+      // is not a resource and says nothing about the token.
+      const rejected = res.status === 401 || res.status === 403
+      return {
+        ok: !rejected && res.status < 500,
+        status: res.status,
+        statusText: res.statusText,
+        detail: body.slice(0, 600),
+        target: candidate ? `${candidate.method} ${candidate.path}` : this.manifest.baseUrl
+      }
+    } catch (err) {
+      // No status: the request never reached a server. A wrong base URL and a dead network land
+      // here together, so the message is the only thing that separates them.
+      return {
+        ok: false,
+        status: null,
+        statusText: '',
+        detail: err instanceof Error ? err.message : String(err),
+        target: candidate ? `${candidate.method} ${candidate.path}` : this.manifest.baseUrl
+      }
+    }
+  }
+
+  /** The base URL with auth applied, for a manifest whose every operation needs arguments. */
+  private async baseRequest(): Promise<{ url: string; init: RequestInit }> {
+    const url = new URL(
+      this.manifest.baseUrl.endsWith('/') ? this.manifest.baseUrl : `${this.manifest.baseUrl}/`
+    )
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+      ...this.manifest.defaultHeaders
+    }
+    await this.applyAuth(this.manifest.auth, headers, url)
+    return { url: url.toString(), init: { method: 'GET', headers } }
   }
 
   private requireSecret(ref: string): string {
