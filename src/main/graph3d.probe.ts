@@ -156,6 +156,7 @@ const SETTINGS = {
     linkDistance: 78,
     charge: -280,
     labelThreshold: 0.75,
+    showLabels: true,
     rotate: true
   },
   layout: { panelWidth: 430 },
@@ -768,6 +769,45 @@ async function main(): Promise<void> {
       check('the setting stops it turning', !differs(first, second))
     }
     await close(win)
+    SETTINGS.graph.rotate = true
+  }
+
+  /* ------------------------------------------------------ names on and off -- */
+
+  log('\nnote names')
+  {
+    // A privacy control whose failure mode is silent: the button reads "hide", the user shares
+    // their screen, and every note title is still on it. So this is asserted against pixels
+    // rather than against the setting having been written.
+    SETTINGS.graph.rotate = false
+    SETTINGS.graph.showLabels = true
+
+    const withNames = await open(true)
+    let labelled: Buffer | null = null
+    const rectOn = await canvasRect(withNames)
+    if (rectOn) {
+      await wait(1400)
+      labelled = await shoot(withNames, rectOn)
+    }
+    await close(withNames)
+
+    SETTINGS.graph.showLabels = false
+    const withoutNames = await open(true)
+    const rectOff = await canvasRect(withoutNames)
+    if (rectOff && labelled) {
+      await wait(1400)
+      const bare = await shoot(withoutNames, rectOff)
+      writeFileSync(join(OUT, 'graph-3d-no-labels.png'), bare)
+      log(`  wrote ${join(OUT, 'graph-3d-no-labels.png')}`)
+
+      check('turning names off changes what is drawn', differs(labelled, bare))
+      // Nodes and edges are the bulk of the picture, so it must not have gone blank: a gate in
+      // the wrong place could skip the whole draw and pass a "something changed" check.
+      check('and the graph is still there', bare.length > 20_000, { bytes: bare.length })
+    }
+    await close(withoutNames)
+
+    SETTINGS.graph.showLabels = true
     SETTINGS.graph.rotate = true
   }
 

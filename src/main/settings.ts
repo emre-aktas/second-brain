@@ -42,6 +42,9 @@ export function defaultSettings(workspacePath: string): Settings {
       linkDistance: 70,
       charge: -260,
       labelThreshold: 0.75,
+      // On. Names are what makes a graph a graph rather than a diagram of dots — this exists to
+      // be turned *off* for a moment, not to be lived without.
+      showLabels: true,
       rotate: true
     },
     layout: {

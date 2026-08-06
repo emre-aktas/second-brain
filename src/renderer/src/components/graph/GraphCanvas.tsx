@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Maximize, Minus, Plus } from 'lucide-react'
+import { Eye, EyeOff, Maximize, Minus, Plus } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { GraphSnapshot, NodeKind } from '@shared/types'
 import { api } from '@/lib/api'
 import {
@@ -56,7 +57,7 @@ export interface GraphCanvasProps {
   pulses: { id: string; at: number; kind: 'change' | 'probe' }[]
   /** Right-click menu actions the shell handles (ask, link, reveal, trash…). */
   onNodeAction?: (action: string, node: GraphSnapshot['nodes'][number]) => void
-  settings: ForceSettings & { labelThreshold: number; rotate: boolean }
+  settings: ForceSettings & { labelThreshold: number; rotate: boolean; showLabels: boolean }
   reduceMotion: boolean
   /**
    * The agent is mid-turn.
@@ -67,6 +68,14 @@ export interface GraphCanvasProps {
    * animation needs beyond it is already on the canvas.
    */
   agentBusy?: boolean
+  /**
+   * Flip node names on and off.
+   *
+   * In the zoom cluster rather than in Settings because of what it is for: somebody is about to
+   * look at the screen. A privacy control two panels deep is one that gets used after the
+   * screenshot.
+   */
+  onToggleLabels?: () => void
 }
 
 const PULSE_MS = 900
@@ -144,7 +153,8 @@ export function GraphCanvas({
   onNodeAction,
   settings,
   reduceMotion,
-  agentBusy = false
+  agentBusy = false,
+  onToggleLabels
 }: GraphCanvasProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -1379,8 +1389,16 @@ export function GraphCanvas({
           ctx.stroke()
         }
 
+        /*
+         * Nothing is labelled when names are off — including whatever the agent is reading.
+         *
+         * Exempting attention would defeat the point: the nodes with names on them would be
+         * exactly the ones the agent had just looked up, which is the most revealing subset
+         * there is.
+         */
         const shouldLabel =
-          inAttention || camera.scale >= settings.labelThreshold || node.degree >= HUB_LABEL_DEGREE
+          settings.showLabels &&
+          (inAttention || camera.scale >= settings.labelThreshold || node.degree >= HUB_LABEL_DEGREE)
         if (shouldLabel) {
           labelCandidates.push({
             id,
@@ -1506,6 +1524,7 @@ export function GraphCanvas({
     projectAll,
     reduceMotion,
     settings.labelThreshold,
+    settings.showLabels,
     settings.rotate
   ])
 
@@ -1774,7 +1793,11 @@ export function GraphCanvas({
         />
       )}
 
-      <GraphControls onFit={() => fitToContent()} onZoom={(factor) => {
+      <GraphControls
+        labelsOn={settings.showLabels}
+        onToggleLabels={onToggleLabels}
+        onFit={() => fitToContent()}
+        onZoom={(factor) => {
         tweenRef.current.cancel()
         cameraRef.current = zoomAt(
           cameraRef.current,
@@ -1783,16 +1806,21 @@ export function GraphCanvas({
           viewportRef.current.height / 2,
           factor
         )
-        needsDrawRef.current = true
-      }} />
+          needsDrawRef.current = true
+        }}
+      />
     </div>
   )
 }
 
 function GraphControls({
+  labelsOn,
+  onToggleLabels,
   onFit,
   onZoom
 }: {
+  labelsOn: boolean
+  onToggleLabels?: () => void
   onFit: () => void
   onZoom: (factor: number) => void
 }): React.JSX.Element {
@@ -1807,16 +1835,32 @@ function GraphControls({
       <ControlButton label="Fit to view" onClick={onFit}>
         <Maximize className="size-4" />
       </ControlButton>
+      {onToggleLabels && (
+        <>
+          {/* Ruled off, because this one is not about the camera. */}
+          <div className="mx-1 h-px bg-border/60" aria-hidden="true" />
+          <ControlButton
+            label={labelsOn ? 'Hide note names' : 'Show note names'}
+            pressed={!labelsOn}
+            onClick={onToggleLabels}
+          >
+            {labelsOn ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+          </ControlButton>
+        </>
+      )}
     </div>
   )
 }
 
 function ControlButton({
   label,
+  pressed,
   onClick,
   children
 }: {
   label: string
+  /** Latched on, for a control with a state rather than an action. */
+  pressed?: boolean
   onClick: () => void
   children: React.ReactNode
 }): React.JSX.Element {
@@ -1824,9 +1868,17 @@ function ControlButton({
     <button
       type="button"
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       onClick={onClick}
-      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] hover:bg-accent hover:text-accent-foreground active:scale-[0.96]"
+      className={cn(
+        'grid size-7 place-items-center rounded-md transition-[transform,color,background-color] duration-150 ease-[var(--ease-out)] active:scale-[0.96]',
+        // Latched, so "the names are off" is legible from the control itself. Without it the
+        // only way to tell is to look at the graph and try to remember whether it had names.
+        pressed
+          ? 'bg-primary/15 text-primary'
+          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+      )}
     >
       {children}
     </button>

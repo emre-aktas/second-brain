@@ -21,6 +21,7 @@ import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { NotePanel } from '@/components/panels/NotePanel'
 import { ActivityPanel, SettingsPanel } from '@/components/panels/SidePanels'
+import { IntegrationsPanel } from '@/components/panels/IntegrationsPanel'
 import { ScheduledPanel } from '@/components/panels/ScheduledPanel'
 import { Updates } from '@/components/Updates'
 import { ToolsPanel } from '@/components/panels/ToolsPanel'
@@ -93,6 +94,15 @@ function Shell(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
   const panel = useApp((s) => s.panel)
   const setPanel = useApp((s) => s.setPanel)
+
+  /*
+   * The agent asking for the Integrations panel.
+   *
+   * It cannot write a credential — there is no tool for that anywhere — so the most it can do is
+   * put the user in front of the field and say what goes in it. Switching the panel has to happen
+   * here: the panel itself cannot open itself when it is not mounted.
+   */
+  useEffect(() => onEvent('integrations:focus', () => setPanel('integrations')), [setPanel])
   const selectedNodeId = useApp((s) => s.selectedNodeId)
   const selectNode = useApp((s) => s.selectNode)
   const clearFocus = useApp((s) => s.clearFocus)
@@ -331,8 +341,14 @@ function Shell(): React.JSX.Element {
               linkDistance: settings?.graph.linkDistance ?? 70,
               charge: settings?.graph.charge ?? -260,
               labelThreshold: settings?.graph.labelThreshold ?? 0.75,
-              rotate: settings?.graph.rotate ?? true
+              rotate: settings?.graph.rotate ?? true,
+              showLabels: settings?.graph.showLabels ?? true
             }}
+            onToggleLabels={() =>
+              void updateSettings({
+                graph: { showLabels: !(settings?.graph.showLabels ?? true) }
+              })
+            }
             reduceMotion={reduceMotion}
             agentBusy={agentState !== 'idle' && agentState !== 'error'}
           />
@@ -381,6 +397,7 @@ function Shell(): React.JSX.Element {
             {panel === 'note' && <NotePanel />}
             {panel === 'tools' && <ToolsPanel />}
             {panel === 'tasks' && <ScheduledPanel />}
+            {panel === 'integrations' && <IntegrationsPanel />}
             {panel === 'activity' && <ActivityPanel />}
             {panel === 'settings' && <SettingsPanel />}
           </div>
@@ -463,6 +480,10 @@ const PANELS: { id: Panel; label: string; Icon: LucideIcon }[] = [
   { id: 'note', label: 'Note', Icon: FileText },
   { id: 'tools', label: 'Tools', Icon: Wand2 },
   { id: 'tasks', label: 'Scheduled', Icon: CalendarClock },
+  // The rail is the only way to reach a panel, and this entry was missing — which is why an
+  // integration the agent registered had nowhere to be approved. `Panel` has always included
+  // 'integrations' and `IntegrationsPanel` has always been exported; nothing mounted it.
+  { id: 'integrations', label: 'Integrations', Icon: Plug },
   { id: 'activity', label: 'Activity', Icon: Activity },
   { id: 'settings', label: 'Settings', Icon: Settings }
 ]
