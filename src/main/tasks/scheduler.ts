@@ -271,6 +271,13 @@ export class Scheduler {
 
     log.info(`running "${task.name}"${manual ? ' (by hand)' : ''} in session ${sessionId.slice(-6)}`)
 
+    // Announced at the *start*, not only at the end. `sessionForRun` has just pointed the task
+    // at a new chat, and the panel decides whether a task is running by asking whether that
+    // chat has a turn in flight — an answer it gets from the agent's own event stream, live.
+    // Told only afterwards, it would be holding the previous run's session id for the whole
+    // duration and would show a running task as idle.
+    this.onChanged?.()
+
     try {
       await this.agent.send(prompt, {
         sessionId,

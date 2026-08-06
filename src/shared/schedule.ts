@@ -198,3 +198,156 @@ export function describeSchedule(schedule: Schedule): string {
     }
   }
 }
+
+/* ------------------------------------------------------------------ projection */
+
+/**
+ * How much of the window is already behind the reader.
+ *
+ * A window that begins exactly at now puts the current moment on the container's own left
+ * edge, where a marker for it is indistinguishable from a border. A little elapsed time in
+ * front of it is what makes the line read as a position in the day rather than as the frame
+ * around one — and it costs a twenty-fourth of the axis.
+ *
+ * The day view gets an hour; the week view gets whatever of today has already passed, because
+ * a week's worth of marks starting mid-Thursday with no Thursday morning to sit after reads as
+ * though the week begins now.
+ */
+const LEAD_IN_MINUTES = 60
+
+/**
+ * The window a timeline covers.
+ *
+ * It was floored to the hour or the day, so the ticks were round numbers and most of the first
+ * unit was elapsed time nobody asked for. It was then started exactly at now, which fixed that
+ * and made the current moment unmarkable. This is the third answer and it keeps both halves: a
+ * short lead-in so the "now" line has somewhere to be, and `axisTicks` placing the labels on
+ * the round boundaries *inside* the window rather than at its start.
+ */
+export function timelineWindow(now: number, span: '24h' | '7d'): { from: number; until: number } {
+  if (span === '24h') {
+    const from = now - LEAD_IN_MINUTES * MINUTE
+    return { from, until: from + 24 * 60 * MINUTE }
+  }
+
+  const start = new Date(now)
+  start.setHours(0, 0, 0, 0)
+  // Stepped by date, not `+ 7 * 24h`: across a DST change the latter is off by an hour, and
+  // every day boundary inside the window slides with it.
+  const end = new Date(start)
+  end.setDate(end.getDate() + 7)
+  return { from: start.getTime(), until: end.getTime() }
+}
+
+/**
+ * Where to label a timeline, in round units, inside the window.
+ *
+ * Round because "18:00" is a time the reader already knows the position of and "14:37 + 6h"
+ * is arithmetic. Inside because the window starts at an arbitrary moment: the first boundary
+ * is the next one *after* it, so no label sits on the left edge, where it would claim to mark
+ * a time that is really just "now".
+ */
+export function axisTicks(from: number, until: number, span: '24h' | '7d'): number[] {
+  const ticks: number[] = []
+  const cursor = new Date(from)
+
+  if (span === '24h') {
+    // The next multiple of six hours. Four labels across a day is what a sidebar fits — at
+    // this width three-hour spacing has neighbours touching, and two labels overlapping is
+    // worse than one label missing.
+    cursor.setMinutes(0, 0, 0)
+    cursor.setHours(cursor.getHours() + (6 - (cursor.getHours() % 6)))
+    while (cursor.getTime() < until) {
+      ticks.push(cursor.getTime())
+      cursor.setHours(cursor.getHours() + 6)
+    }
+    return ticks
+  }
+
+  cursor.setHours(0, 0, 0, 0)
+  cursor.setDate(cursor.getDate() + 1)
+  while (cursor.getTime() < until) {
+    ticks.push(cursor.getTime())
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return ticks
+}
+
+/**
+ * Every time a schedule comes due inside a window.
+ *
+ * `nextRun` answers "when is the one after this", and a timeline needs the series. Written
+ * here rather than in the component because it is the same arithmetic the scheduler runs,
+ * and a timeline that disagrees with the scheduler is worse than no timeline: the user would
+ * be reading a promise the app has no intention of keeping.
+ *
+ * `firstAt` is the scheduler's own answer for the next run, and it is used verbatim when it
+ * falls in the window. Recomputing it here would show a different first mark than the row
+ * above it says — the two must agree, and only one of them is authoritative.
+ */
+export function upcomingRuns(input: {
+  schedule: Schedule
+  from: number
+  until: number
+  firstAt?: number | null
+  quiet?: QuietHours
+  /** A ceiling on marks, so a five-minute cadence over a week cannot stall a render. */
+  limit?: number
+}): { times: number[]; truncated: boolean } {
+  const quiet = input.quiet ?? { enabled: false, startHour: 0, endHour: 0 }
+  const limit = input.limit ?? 400
+  const times: number[] = []
+
+  let cursor = input.from
+  if (input.firstAt != null && input.firstAt >= input.from && input.firstAt < input.until) {
+    times.push(input.firstAt)
+    cursor = input.firstAt
+  }
+
+  while (times.length < limit) {
+    const next = nextRun(input.schedule, cursor, quiet)
+    // Guarded because this is a render loop and the alternative is a hung window. A
+    // schedule that fails to advance — a zero interval, a quiet window that swallows its
+    // own end — would otherwise spin here for ever.
+    if (!Number.isFinite(next) || next <= cursor) break
+    cursor = next
+    if (next >= input.until) break
+    times.push(next)
+  }
+
+  return { times, truncated: times.length >= limit }
+}
+
+/**
+ * The stretches inside a window when nothing will run.
+ *
+ * Drawn behind the marks because it answers the question the gaps raise: a task that says
+ * "every hour" with a six-hour hole in it looks broken until you can see the hole is the
+ * quiet window. Returned as spans rather than tested per pixel so the component does no
+ * arithmetic of its own.
+ */
+export function quietSpans(
+  from: number,
+  until: number,
+  quiet: QuietHours
+): { start: number; end: number }[] {
+  if (!quiet.enabled || quiet.startHour === quiet.endHour) return []
+
+  const spans: { start: number; end: number }[] = []
+  // Walked hour by hour and merged, which handles the window that wraps midnight without a
+  // second code path — 23 to 7 is one span, and the arithmetic that gets that wrong is the
+  // arithmetic every implementation of this gets wrong.
+  const cursor = new Date(from)
+  cursor.setMinutes(0, 0, 0)
+
+  for (let time = cursor.getTime(); time < until; time += 60 * MINUTE) {
+    if (!inQuietHours(time, quiet)) continue
+    const start = Math.max(from, time)
+    const end = Math.min(until, time + 60 * MINUTE)
+    const last = spans[spans.length - 1]
+    if (last && last.end >= start) last.end = end
+    else spans.push({ start, end })
+  }
+
+  return spans
+}

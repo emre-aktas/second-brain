@@ -37,6 +37,7 @@ const SUITE = [
   { file: 'src/shared/schedule.test.ts', mode: 'node' },
   { file: 'src/shared/wikilinks.test.ts', mode: 'node' },
   { file: 'src/shared/graph-3d.test.ts', mode: 'node' },
+  { file: 'src/shared/node-size.test.ts', mode: 'node' },
   { file: 'src/main/vault/markdown.test.ts', mode: 'node' },
   { file: 'src/main/vault/unicode.test.ts', mode: 'node' },
   { file: 'src/main/settings.test.ts', mode: 'node' },
@@ -59,6 +60,7 @@ const SUITE = [
   { file: 'src/main/toolWindow.probe.ts', mode: 'gui' },
   { file: 'src/main/windowSize.probe.ts', mode: 'gui' },
   { file: 'src/main/toolPreview.probe.ts', mode: 'gui' },
+  { file: 'src/main/scheduleTimeline.probe.ts', mode: 'gui' },
 
   { file: 'src/main/agent/spawn.probe.ts', mode: 'cli' },
   { file: 'src/main/agent/flags.probe.ts', mode: 'cli' }

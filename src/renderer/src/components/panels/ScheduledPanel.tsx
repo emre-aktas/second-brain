@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   CalendarClock,
@@ -10,6 +10,7 @@ import {
   Pause,
   Play,
   Plus,
+  SlidersHorizontal,
   Trash2,
   Zap
 } from 'lucide-react'
@@ -22,6 +23,7 @@ import { NativeSelect, Spinner } from '@/components/ui/base'
 import { Button } from '@/components/ui/button'
 import { Input, Textarea } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { ScheduleTimeline } from './ScheduleTimeline'
 import { Tooltip } from '@/components/ui/tooltip'
 import { toast } from '@/components/ui/sonner'
 
@@ -64,6 +66,34 @@ export function ScheduledPanel(): React.JSX.Element {
 
   const proactive = settings?.proactive
   const enabled = proactive?.enabled ?? false
+  const heartbeat = proactive?.heartbeat ?? false
+
+  /**
+   * Whether a switch above this task means nothing will run, whatever the task says.
+   *
+   * One rule, read by the cards and by the timeline. Restated in the timeline it would be a
+   * second answer to the same question, and the visible symptom of a drift would be a dot
+   * promising a run that the card beneath it says is held.
+   */
+  const isHeld = useCallback(
+    (task: ScheduledTask): boolean => !enabled || (task.kind === 'heartbeat' && !heartbeat),
+    [enabled, heartbeat]
+  )
+
+  const running = useMemo(
+    () => tasks.filter((task) => task.enabled && !isHeld(task)),
+    [tasks, isHeld]
+  )
+
+  /*
+   * Which tasks have a turn in flight, taken from the agent's own event stream.
+   *
+   * A run's chat is the task's `sessionId` — the scheduler points it there as the run starts
+   * and says so — and `runningSessionIds` is what the store already derives from agent state.
+   * Read this way it is live: no polling, and a run the *scheduler* started looks exactly like
+   * one the user pressed a button for, which is the point.
+   */
+  const runningSessions = useApp((s) => s.runningSessionIds)
 
   const runNow = async (task: ScheduledTask): Promise<void> => {
     setBusyId(task.id)
@@ -117,6 +147,14 @@ export function ScheduledPanel(): React.JSX.Element {
             />
           )}
 
+          {tasks.length > 0 && (
+            <ScheduleTimeline
+              tasks={running}
+              paused={tasks.length - running.length}
+              quiet={proactive?.quietHours}
+            />
+          )}
+
           {tasks.length === 0 && !composing && (
             <p className="px-1 py-6 text-center text-[12.5px] leading-relaxed text-muted-foreground text-pretty">
               Nothing scheduled yet. Ask in the conversation — &ldquo;every morning,
@@ -128,8 +166,12 @@ export function ScheduledPanel(): React.JSX.Element {
             <TaskCard
               key={task.id}
               task={task}
-              held={!enabled || (task.kind === 'heartbeat' && !(proactive?.heartbeat ?? false))}
+              held={isHeld(task)}
               busy={busyId === task.id}
+              runningNow={
+                busyId === task.id ||
+                (task.sessionId !== null && runningSessions.includes(task.sessionId))
+              }
               onRunNow={() => void runNow(task)}
               onToggle={() => void api.setTaskEnabled(task.id, !task.enabled).then(refresh)}
               onDelete={() => void api.removeTask(task.id).then(refresh)}
@@ -163,32 +205,63 @@ function MasterSwitch({
   sweep: Settings['proactive']['sweep'] | undefined
   onChange: (patch: Parameters<ReturnType<typeof useApp.getState>['updateSettings']>[0]) => Promise<void>
 }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+
   return (
     <div
       className={cn(
-        'rounded-lg border px-3 py-2.5 transition-colors duration-150',
-        enabled ? 'border-primary/30 bg-primary/8' : 'border-border bg-secondary/30'
+        'rounded-lg border transition-colors duration-150',
+        enabled ? 'border-primary/25 bg-primary/[0.06]' : 'border-border bg-secondary/30'
       )}
     >
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => void onChange({ proactive: { enabled: event.target.checked } })}
-          className="mt-0.5 size-4 shrink-0 accent-primary"
-        />
-        <span className="min-w-0">
-          <span className="block text-[13px] font-medium text-foreground">Work on its own</span>
-          <span className="mt-0.5 block text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
-            {enabled
-              ? 'Scheduled jobs run, and the check-in looks in from time to time. Each run gets its own conversation.'
-              : 'Nothing runs on a schedule — including the jobs below. The app only acts when you ask it to.'}
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => void onChange({ proactive: { enabled: event.target.checked } })}
+            className="size-4 shrink-0 accent-primary"
+          />
+          <span className="min-w-0">
+            <span className="block text-[13px] font-medium leading-tight text-foreground">
+              Work on its own
+            </span>
+            {/*
+              One line, and only the part that is not already visible. What proactivity *is*
+              was three sentences here; the timeline below now shows it, so the copy only has
+              to say which of the two states the switch is in.
+            */}
+            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+              {enabled ? summarise(heartbeat, quiet) : 'Nothing runs unless you ask'}
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
 
-      {enabled && quiet && (
-        <div className="mt-2.5 flex flex-col gap-2 border-t border-border/60 pt-2.5">
+        {enabled && (
+          <Tooltip content={open ? 'Hide options' : 'Options'}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={open ? 'Hide proactivity options' : 'Show proactivity options'}
+              aria-expanded={open}
+              onClick={() => setOpen((value) => !value)}
+              className="shrink-0"
+            >
+              <SlidersHorizontal className="size-3.5" />
+            </Button>
+          </Tooltip>
+        )}
+      </div>
+
+      {/*
+        Behind a disclosure, closed by default.
+
+        These are five controls that are set once and then read never — a sweep interval and a
+        quiet window are decisions, not a dashboard. Left open they were the tallest thing in
+        the panel, above the jobs the panel exists to show.
+      */}
+      {enabled && open && quiet && (
+        <div className="flex flex-col gap-2 border-t border-border/50 px-3 py-2.5">
           <label className="flex cursor-pointer items-center gap-2 text-[12px] text-muted-foreground">
             <input
               type="checkbox"
@@ -200,8 +273,8 @@ function MasterSwitch({
           </label>
 
           {heartbeat && sweep && (
-            <div className="flex flex-col gap-1.5 rounded-md border border-border/60 bg-secondary/20 px-2 py-1.5">
-              <label className="flex cursor-pointer items-center gap-2 text-[12px] text-muted-foreground">
+            <>
+              <label className="flex cursor-pointer flex-wrap items-center gap-1.5 pl-5 text-[12px] text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={sweep.enabled}
@@ -228,7 +301,7 @@ function MasterSwitch({
               </label>
 
               {sweep.enabled && (
-                <div className="flex items-center gap-3 pl-5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-10">
                   {(['slack', 'grain', 'clickup'] as const).map((source) => (
                     <label
                       key={source}
@@ -247,19 +320,17 @@ function MasterSwitch({
                       {SWEEP_LABEL[source]}
                     </label>
                   ))}
+                  {/*
+                    Kept, shortened. This is the one part of proactivity that is not free —
+                    the vault check costs nothing on a quiet hour, a sweep is a turn every
+                    time — and dropping it to save a line would be dropping the warning.
+                  */}
+                  <span className="text-[10.5px] text-muted-foreground/80">
+                    · a turn every time it runs
+                  </span>
                 </div>
               )}
-
-              {/*
-                Said plainly, because this is the one part of proactivity that is not free.
-                The vault check costs nothing on a quiet hour; a sweep is a turn every time.
-              */}
-              <p className="pl-5 text-[10.5px] leading-relaxed text-muted-foreground text-pretty">
-                {sweep.enabled
-                  ? 'Unlike the vault check, this spends a turn every time it runs — the interval is the budget. Sources you have not connected are never mentioned.'
-                  : 'The check-in only looks at your notes.'}
-              </p>
-            </div>
+            </>
           )}
 
           <label className="flex cursor-pointer flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
@@ -289,12 +360,31 @@ function MasterSwitch({
   )
 }
 
+/**
+ * The switch's own state in one clause.
+ *
+ * Assembled rather than written out because there are four combinations and a ternary per
+ * clause reads worse than the list does — and because the quiet window is the half of this
+ * that surprises people ("why did nothing run overnight").
+ */
+function summarise(
+  heartbeat: boolean,
+  quiet: { enabled: boolean; startHour: number; endHour: number } | undefined
+): string {
+  const parts = [heartbeat ? 'Runs jobs and checks in' : 'Runs scheduled jobs']
+  if (quiet?.enabled) {
+    parts.push(`quiet ${String(quiet.startHour).padStart(2, '0')}–${String(quiet.endHour).padStart(2, '0')}`)
+  }
+  return parts.join(' · ')
+}
+
 /* ----------------------------------------------------------------- one job */
 
 function TaskCard({
   task,
   held,
   busy,
+  runningNow,
   onRunNow,
   onToggle,
   onDelete
@@ -303,6 +393,8 @@ function TaskCard({
   /** A switch above this one is off, so nothing will run whatever this card says. */
   held: boolean
   busy: boolean
+  /** A turn is in flight for this task, whoever started it. */
+  runningNow: boolean
   onRunNow: () => void
   onToggle: () => void
   onDelete: () => void
@@ -318,9 +410,9 @@ function TaskCard({
         inert && 'opacity-60'
       )}
     >
-      <div className="flex items-start justify-between gap-2 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+          <p className="flex items-center gap-1.5 text-[12.5px] font-medium leading-tight text-foreground">
             {builtIn ? (
               <Zap className="size-3.5 shrink-0 text-primary" />
             ) : (
@@ -328,9 +420,17 @@ function TaskCard({
             )}
             <span className="truncate">{task.name}</span>
           </p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          {/*
+            The cadence and the next run on one line.
+
+            They were two, on opposite ends of the card, with the timeline above stating the
+            second one a third time. One clause is the whole of what a collapsed card has to
+            say: what it does is in the prompt, which is a disclosure away.
+          */}
+          <p className="mt-1 truncate text-[11px] leading-none text-muted-foreground">
             {describeSchedule(task.schedule)}
-            {task.createdBy === 'agent' && ' · set up by the agent'}
+            <span className="text-muted-foreground/70"> · </span>
+            <NextRun task={task} held={held} />
           </p>
         </div>
 
@@ -380,19 +480,13 @@ function TaskCard({
         </div>
       </div>
 
-      {task.prompt && (
-        <p className="line-clamp-2 px-3 pb-2 text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
-          {task.prompt}
-        </p>
-      )}
-
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-label={`${open ? 'Hide' : 'Show'} the run history for ${task.name}`}
+        aria-label={`${open ? 'Hide' : 'Show'} what ${task.name} does and how it has gone`}
         className={cn(
-          'flex w-full items-center gap-1.5 border-t border-border/60 px-3 py-1.5',
+          'flex w-full items-center gap-1.5 border-t border-border/50 px-3 py-1.5',
           'text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground'
         )}
       >
@@ -402,19 +496,45 @@ function TaskCard({
             open && 'rotate-90'
           )}
         />
-        <NextRun task={task} held={held} />
+        {/*
+          What is happening beats what has happened. "9 runs" beside a task that is working
+          right now is true and useless — the count is still one line down, in the history.
+        */}
+        {runningNow ? (
+          <span className="flex items-center gap-1.5 text-foreground">
+            <Spinner className="size-3" />
+            running
+          </span>
+        ) : open ? (
+          'Runs'
+        ) : task.runCount > 0 ? (
+          `${task.runCount} runs`
+        ) : (
+          'Runs'
+        )}
         <span className="ml-auto flex items-center gap-1">
-          <LastOutcome task={task} />
+          {!runningNow && <LastOutcome task={task} />}
         </span>
       </button>
 
-      {open && <RunHistory taskId={task.id} />}
+      {/*
+        The runs, and nothing else.
+
+        The prompt used to be here, and before that in the collapsed card. It is hundreds of
+        words of instructions written for a model — the same reason the chat hides it when a
+        run injects it. What the user opens this for is whether the thing has been working.
+      */}
+      {open && (
+        <div className="border-t border-border/50">
+          <RunHistory taskId={task.id} />
+        </div>
+      )}
     </div>
   )
 }
 
 function NextRun({ task, held }: { task: ScheduledTask; held: boolean }): React.JSX.Element {
-  if (held) return <span>held — working on its own is off</span>
+  if (held) return <span>held</span>
   if (!task.enabled) return <span>paused</span>
   if (task.nextRunAt) return <span>next {formatRelativeTime(task.nextRunAt)}</span>
   return <span>not scheduled</span>
@@ -425,10 +545,11 @@ function NextRun({ task, held }: { task: ScheduledTask; held: boolean }): React.
  *
  * `skipped` reads as an ordinary outcome rather than a warning, because for the check-in
  * it is the *expected* one: most of the time nothing has changed, and the design depends
- * on that costing nothing.
+ * on that costing nothing. A job that has never run says nothing at all — "never run" was
+ * a third line of nothing on every freshly added job.
  */
 function LastOutcome({ task }: { task: ScheduledTask }): React.JSX.Element | null {
-  if (!task.lastStatus) return <span className="text-muted-foreground">never run</span>
+  if (!task.lastStatus) return null
 
   if (task.lastStatus === 'error') {
     return (
