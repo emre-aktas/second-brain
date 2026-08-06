@@ -307,6 +307,36 @@ function stub(): void {
 
 const wait = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms))
 
+/**
+ * Wait until something is true, or give up.
+ *
+ * Every fixed sleep in this probe was a guess about how fast a machine is, and the guesses
+ * held here and failed on CI — where the layout had not settled inside five seconds, so a
+ * check for "the positions were saved" failed and the two frames a rotation check compares
+ * differed because the graph was still moving rather than because it turns.
+ */
+async function until(what: () => boolean, timeoutMs: number, step = 120): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (what()) return true
+    await wait(step)
+  }
+  return what()
+}
+
+/**
+ * Whether the page considers itself visible.
+ *
+ * Auto-rotation is gated on visibility, deliberately — a minimised window must not burn a
+ * GPU. An off-screen window on a CI runner can report itself hidden, and then a rotation
+ * check is not failing, it is unrunnable. Better to say so than to assert into the dark.
+ */
+async function pageVisible(win: BrowserWindow): Promise<boolean> {
+  return (
+    String(await win.webContents.executeJavaScript('document.visibilityState')) === 'visible'
+  )
+}
+
 /** The canvas's own rectangle, so a capture is not comparing the chat panel's caret. */
 async function canvasRect(
   win: BrowserWindow
@@ -356,8 +386,20 @@ async function open(dark: boolean): Promise<BrowserWindow> {
 
   await win.loadFile(join(root, 'out/renderer/index.html'))
   win.showInactive()
-  // The layout settles, and the reveal and onboarding card finish, before anything counts.
-  await wait(5200)
+
+  /*
+   * Wait for the layout to have settled, not for a number of seconds.
+   *
+   * `graph:savePositions` is only called once the simulation reports `settled`, so its
+   * arrival is the signal that everything downstream — the fit, the first full draw — has
+   * happened. A CI runner took longer than the five seconds this used to sleep for, and
+   * every check after it failed for that reason and no other.
+   */
+  const settledFrom = saved.length
+  const settled = await until(() => saved.length > settledFrom, 30_000)
+  if (!settled) log('  (the layout never settled; the checks below will say so)')
+  // A moment more for the reveal and the onboarding card, which are not worth polling for.
+  await wait(600)
 
   await win.webContents.executeJavaScript(
     `(() => {
@@ -410,16 +452,23 @@ async function main(): Promise<void> {
       return
     }
 
-    const first = await shoot(win, rect)
-    // A full turn takes about two minutes, so two seconds is a couple of degrees. Enough
-    // to move every node, deliberately not enough to look like animation.
-    await wait(2000)
-    const second = await shoot(win, rect)
-    check('the graph turns on its own', differs(first, second))
+    const visible = await pageVisible(win)
+    if (!visible) {
+      // Not a failure: rotation is gated on visibility on purpose, so a runner that reports
+      // its off-screen window as hidden cannot be asked this question.
+      log('  skip  the graph turns on its own (the page reports itself hidden)')
+    } else {
+      const first = await shoot(win, rect)
+      // A full turn takes about three minutes, so two seconds is a couple of degrees. Enough
+      // to move every node, deliberately not enough to look like animation.
+      await wait(2000)
+      const second = await shoot(win, rect)
+      check('the graph turns on its own', differs(first, second))
+      writeFileSync(join(OUT, 'graph-3d-dark-b.png'), second)
+    }
 
-    writeFileSync(join(OUT, 'graph-3d-dark-a.png'), first)
-    writeFileSync(join(OUT, 'graph-3d-dark-b.png'), second)
-    log(`  wrote ${join(OUT, 'graph-3d-dark-a.png')} and -b`)
+    writeFileSync(join(OUT, 'graph-3d-dark-a.png'), await shoot(win, rect))
+    log(`  wrote ${join(OUT, 'graph-3d-dark-a.png')}`)
 
     /* -------------------------------------------- depth reaches the store -- */
 
@@ -672,6 +721,9 @@ async function main(): Promise<void> {
     const win = await open(true)
     const rect = await canvasRect(win)
     if (rect) {
+      // Only meaningful once nothing else is moving: a graph still settling produces two
+      // different frames whatever the rotation setting says.
+      await wait(1200)
       const first = await shoot(win, rect)
       await wait(2000)
       const second = await shoot(win, rect)
