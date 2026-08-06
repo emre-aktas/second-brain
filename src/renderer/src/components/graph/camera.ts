@@ -116,13 +116,21 @@ export function cameraForBounds(
   const width = Math.max(1, bounds.maxX - bounds.minX)
   const height = Math.max(1, bounds.maxY - bounds.minY)
 
-  const scale = clampScale(
-    Math.min(
-      maxScale,
-      (viewport.width - padding * 2) / width,
-      (viewport.height - padding * 2) / height
-    )
-  )
+  /*
+   * The room actually available, floored.
+   *
+   * A viewport narrower than the padding gives a *negative* available width, which walks
+   * through `Math.min` and lands on `MIN_SCALE` — and a graph at 0.06 scale is a speck
+   * indistinguishable from an empty canvas. That is not a hypothetical: a component measured
+   * before its container has been laid out reports a viewport of nothing, and the fit it
+   * computes then is catastrophic rather than merely wrong.
+   */
+  const room = {
+    width: Math.max(80, viewport.width - padding * 2),
+    height: Math.max(80, viewport.height - padding * 2)
+  }
+
+  const scale = clampScale(Math.min(maxScale, room.width / width, room.height / height))
 
   return {
     x: (bounds.minX + bounds.maxX) / 2,

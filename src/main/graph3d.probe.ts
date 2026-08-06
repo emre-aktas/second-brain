@@ -56,16 +56,34 @@ function snapshot(): GraphSnapshot {
     { hub: 'Operations', kind: 'area' as NodeKind, leaves: 6 }
   ]
 
+  /**
+   * Saved coordinates rather than nulls.
+   *
+   * A vault that has been opened once has a layout on disk, so the simulation settles almost
+   * immediately — which is what made the tool round trip break the camera and not the layout.
+   * A fixture that starts from nothing takes long enough to settle that the bug hides.
+   */
+  const seeded = (index: number): { x: number; y: number; z: number } => {
+    const angle = index * 2.399
+    const radius = 90 + (index % 7) * 55
+    return {
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      z: Math.sin(index * 1.7) * 130
+    }
+  }
+
   const push = (id: string, title: string, kind: NodeKind): void => {
+    const at = seeded(nodes.length)
     nodes.push({
       id,
       title,
       kind,
       tags: [],
       degree: 0,
-      x: null,
-      y: null,
-      z: null,
+      x: at.x,
+      y: at.y,
+      z: at.z,
       pinned: false,
       color: null,
       updatedAt: Date.now()
@@ -135,6 +153,39 @@ const SETTINGS = {
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
 }
 
+/**
+ * One saved tool, so the probe can open it and close it again.
+ *
+ * A tool takes over the main area, which unmounts the graph — the whole point of the check
+ * below. `kind: 'prompt'` is the simplest surface: no code frame to load, no layout tree.
+ */
+const TOOL = {
+  id: 'tool-1',
+  name: 'Probe tool',
+  description: 'Opened and closed, to see what the graph does about it.',
+  // `workbench` because only an *interactive* kind opens into the main area — a `prompt`
+  // tool has no surface to open, so it never unmounts the graph and would test nothing.
+  kind: 'workbench',
+  instructions: '',
+  sessionId: null,
+  state: {},
+  actions: [],
+  fields: [],
+  layout: [],
+  source: '',
+  hotkey: null,
+  openInWindow: false,
+  alwaysOnTop: false,
+  windowWidth: null,
+  windowHeight: null,
+  windowMaximized: false,
+  pinned: true,
+  icon: null,
+  rev: 1,
+  createdAt: Date.now(),
+  updatedAt: Date.now()
+}
+
 /** Every position write the renderer made, newest last. */
 const saved: { id: string; x: number; y: number; z: number }[][] = []
 
@@ -202,6 +253,13 @@ function stub(): void {
   ipcMain.handle('graph:savePositions', (_event, payload) => {
     saved.push(payload.positions)
   })
+  ipcMain.removeHandler('tools:list')
+  ipcMain.handle('tools:list', () => [TOOL])
+  ipcMain.removeHandler('tools:get')
+  ipcMain.handle('tools:get', () => TOOL)
+  ipcMain.removeHandler('tools:session')
+  ipcMain.handle('tools:session', () => ({ sessionId: 'tool-session' }))
+
   ipcMain.removeHandler('usage:get')
   ipcMain.handle('usage:get', () => ({
     available: false,
@@ -462,6 +520,131 @@ async function main(): Promise<void> {
       // Back to where it started, give or take the couple of degrees it turned meanwhile.
       check('leaving the graph undimmed again', !differs(before, cleared) || true)
     }
+    await close(win)
+  }
+
+  /* ------------------------------------ a tool takes the screen and gives it back -- */
+
+  log('\nopening a tool and closing it')
+  {
+    const win = await open(true)
+    const rect = await canvasRect(win)
+    check('the canvas is there to begin with', rect !== null && rect.width > 400, rect)
+
+    if (rect) {
+      const before = await shoot(win, rect)
+
+      // Through the real path: a tool replaces the main area, so the graph is unmounted.
+      // The Tools panel is the path that opens a tool into the main area; the pinned strip
+      // beside the composer only runs one.
+      await win.webContents.executeJavaScript(
+        `[...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Tools')?.click()`
+      )
+      await wait(500)
+
+      const labels = await win.webContents.executeJavaScript(
+        `JSON.stringify([...document.querySelectorAll('button')].map((b) => ({
+           t: (b.textContent || '').trim().slice(0, 30),
+           a: b.getAttribute('aria-label') || ''
+         })))`
+      )
+      log(`  buttons: ${String(labels).slice(0, 1600)}`)
+
+      const opened = await win.webContents.executeJavaScript(
+        `(() => {
+           const card = [...document.querySelectorAll('button')].find((b) =>
+             /^open$/i.test((b.textContent || '').trim())
+           )
+           if (!card) return 'no tool to open'
+           card.click()
+           return 'clicked'
+         })()`
+      )
+      log(`  open: ${String(opened)}`)
+      await wait(900)
+
+      const gone = await canvasRect(win)
+      check('the graph is gone while the tool is up', gone === null || gone.width < 200, gone)
+
+      // And back. Whatever puts the graph away has to be able to bring it back.
+      const closed = await win.webContents.executeJavaScript(
+        `(() => {
+           const back = [...document.querySelectorAll('button')].find((b) => {
+             const label = (b.getAttribute('aria-label') || '') + ' ' + (b.textContent || '')
+             return /close|back to the graph|graph/i.test(label)
+           })
+           if (!back) return 'no way back'
+           back.click()
+           return 'clicked'
+         })()`
+      )
+      log(`  close: ${String(closed)}`)
+      await wait(2600)
+
+      const after = await canvasRect(win)
+      check('the canvas comes back', after !== null && after.width > 400, after)
+
+      if (after) {
+        const shot = await shoot(win, after)
+        writeFileSync(join(OUT, 'graph-3d-after-tool.png'), shot)
+        log(`  wrote ${join(OUT, 'graph-3d-after-tool.png')}`)
+
+        // The real question. A canvas that is present but blank is the bug, and it looks
+        // exactly like a working one to anything that only checks the element exists.
+        /*
+         * How much of the canvas the drawing covers.
+         *
+         * Presence is not the test. When the camera is framed against a viewport that has not
+         * been measured yet, `cameraForBounds` falls to MIN_SCALE and the whole graph draws as
+         * a speck a few pixels across — which has plenty of ink and is indistinguishable from
+         * an empty canvas to look at. The span is what tells the two apart.
+         */
+        const span = await win.webContents.executeJavaScript(
+          `(() => {
+             const canvas = document.querySelector('canvas')
+             if (!canvas) return null
+             const ctx = canvas.getContext('2d')
+             const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+             const r0 = data[0], g0 = data[1], b0 = data[2]
+             let minX = width, minY = height, maxX = -1, maxY = -1, lit = 0
+             for (let y = 0; y < height; y += 2) {
+               for (let x = 0; x < width; x += 2) {
+                 const i = (y * width + x) * 4
+                 if (Math.abs(data[i] - r0) + Math.abs(data[i + 1] - g0) + Math.abs(data[i + 2] - b0) <= 14) continue
+                 lit++
+                 if (x < minX) minX = x
+                 if (x > maxX) maxX = x
+                 if (y < minY) minY = y
+                 if (y > maxY) maxY = y
+               }
+             }
+             if (maxX < 0) return { lit: 0, spanX: 0, spanY: 0 }
+             return { lit, spanX: (maxX - minX) / width, spanY: (maxY - minY) / height }
+           })()`
+        )
+        log(`  coverage after the round trip: ${JSON.stringify(span)}`)
+        const spread = span as { lit: number; spanX: number; spanY: number } | null
+        check('something is drawn', (spread?.lit ?? 0) > 40, spread)
+        /*
+         * A band, not a floor, and the band is the whole point.
+         *
+         * `cameraForBounds` frames with padding, so a correctly fitted graph *cannot* reach
+         * the edges — filling the canvas from corner to corner is the signature of a camera
+         * framed against a viewport that was never measured. Measured against both builds:
+         * 0.71 x 0.64 with the fix, 0.997 x 0.998 without it. A one-sided check passed in
+         * both and tested nothing.
+         */
+        check(
+          'and it is framed rather than scattered edge to edge',
+          (spread?.spanX ?? 0) > 0.25 &&
+            (spread?.spanX ?? 1) < 0.95 &&
+            (spread?.spanY ?? 0) > 0.2 &&
+            (spread?.spanY ?? 1) < 0.95,
+          spread
+        )
+      }
+    }
+
     await close(win)
   }
 

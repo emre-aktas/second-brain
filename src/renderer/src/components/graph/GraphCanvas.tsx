@@ -380,6 +380,10 @@ export function GraphCanvas({
     const worker = workerRef.current
     if (!worker) return
 
+    // Before anything is posted: `init` carries the viewport, and the fit that follows the
+    // first settle is computed from it.
+    measureViewport()
+
     setIsEmpty(snapshot.nodes.length === 0)
     if (snapshot.nodes.length === 0) {
       posRef.current = new Float32Array(0)
@@ -475,6 +479,32 @@ export function GraphCanvas({
     })
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
     return () => observer.disconnect()
+  }, [])
+
+  /* ------------------------------------------------------------- measuring */
+
+  /**
+   * Read the container's real size into `viewportRef`.
+   *
+   * Callable rather than only done by the ResizeObserver, because effects run in the order
+   * they are declared and the observer's is not the first — so on any mount where the graph
+   * snapshot is *already* available, the layout was fed and the camera framed against a
+   * viewport of 1x1. On first launch that never happened, since the snapshot arrives from
+   * bootstrap a moment later; it happened every time the graph was remounted, which is what
+   * closing a tool does.
+   *
+   * A viewport of nothing makes `cameraForBounds` fall to MIN_SCALE, and a graph at 0.06
+   * scale is a speck that reads as an empty canvas.
+   */
+  const measureViewport = useCallback((): { width: number; height: number } => {
+    const container = containerRef.current
+    if (!container) return viewportRef.current
+
+    const rect = container.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      viewportRef.current = { width: rect.width, height: rect.height }
+    }
+    return viewportRef.current
   }, [])
 
   /* -------------------------------------------------------- window visibility */
@@ -582,6 +612,10 @@ export function GraphCanvas({
 
   const fitToContent = useCallback(
     (animate = true) => {
+      // Measured here rather than trusted: this runs on the worker's first `settled`, which
+      // on a vault with saved positions arrives almost immediately — possibly before the
+      // ResizeObserver has said anything.
+      measureViewport()
       // Framed from the *projection*, not the layout: what has to fit on screen is what
       // the current orbit puts there. Framing the raw coordinates would leave a graph
       // seen edge-on floating in the middle of an empty viewport.
@@ -602,7 +636,7 @@ export function GraphCanvas({
       else cameraRef.current = target
       needsDrawRef.current = true
     },
-    [projectAll, reduceMotion]
+    [measureViewport, projectAll, reduceMotion]
   )
 
   /**
@@ -617,6 +651,7 @@ export function GraphCanvas({
    */
   const frameIds = useCallback(
     (ids: Iterable<string>, opts: { padding: number; maxScale: number; ms: number }): Camera | null => {
+      measureViewport()
       const view = projectAll()
       const count = viewCountRef.current
       const points: { x: number; y: number }[] = []
@@ -642,7 +677,7 @@ export function GraphCanvas({
       needsDrawRef.current = true
       return from
     },
-    [projectAll, reduceMotion]
+    [measureViewport, projectAll, reduceMotion]
   )
 
   // Focus request from the agent or the UI.
@@ -714,7 +749,7 @@ export function GraphCanvas({
       const rect = container.getBoundingClientRect()
       const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
 
-      viewportRef.current = { width: rect.width, height: rect.height }
+      measureViewport()
       dprRef.current = dpr
 
       canvas.width = Math.max(1, Math.floor(rect.width * dpr))
@@ -735,7 +770,7 @@ export function GraphCanvas({
     const observer = new ResizeObserver(resize)
     observer.observe(container)
     return () => observer.disconnect()
-  }, [])
+  }, [measureViewport])
 
   /* --------------------------------------------------------- hit testing */
 
