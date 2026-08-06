@@ -182,7 +182,9 @@ const fakeCore = {
   // dueSweepSources reads settings; buildHeartbeat itself does not, but the stand-in has
   // to satisfy both since they share a core.
   settings: {
-    proactive: { sweep: { enabled: false, slack: false, grain: false, everyHours: 4 } }
+    proactive: {
+      sweep: { enabled: false, slack: false, grain: false, clickup: false, everyHours: 4 }
+    }
   }
 } as unknown as Parameters<typeof buildHeartbeat>[0]
 
@@ -245,6 +247,24 @@ check('and it says so, rather than claiming nothing changed', quiet.reason.inclu
  * guard caught it, and the check-in showed up in the Scheduled tab as **failed**. That is
  * exactly what the user saw.
  */
+/**
+ * Several sources at once.
+ *
+ * The prompt joins them into a sentence, so a third one is where "Slack and Grain" either
+ * keeps reading as English or quietly becomes "Slack and Grain and ClickUp".
+ */
+const swept = buildHeartbeat(fakeCore, ['Slack', 'Grain', 'ClickUp'])
+check('a due sweep is worth asking about', swept.worthAsking === true, swept.reason)
+check('and every source is named in the prompt', ['Slack', 'Grain', 'ClickUp'].every((s) => swept.prompt.includes(s)))
+check('and reported in the reason', swept.reason.includes('ClickUp'), swept.reason)
+check('and carried on the brief', swept.swept.length === 3, swept.swept)
+check(
+  'and the sentence reads as English rather than as a loop',
+  swept.prompt.includes('Slack, Grain and ClickUp'),
+  swept.prompt.split('\n').find((line) => line.includes('Also look at'))
+)
+swept.commit()
+
 const forced = buildHeartbeat(fakeCore, [], true)
 check('a forced check-in is always worth asking', forced.worthAsking === true, forced.reason)
 check('and it has a prompt to send', forced.prompt.trim().length > 0)

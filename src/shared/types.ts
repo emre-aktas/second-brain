@@ -914,6 +914,7 @@ export interface Settings {
       enabled: boolean
       slack: boolean
       grain: boolean
+      clickup: boolean
       /** Hours between sweeps. Four means four turns a day at most from this. */
       everyHours: number
     }

@@ -59,6 +59,19 @@ export interface HeartbeatBrief {
  * actually happened? Only when the answer is yes does a turn get spent, and the brief
  * it produces already contains what changed, so the model does not have to go looking.
  */
+/**
+ * A list of names as English.
+ *
+ * `join(' and ')` was fine while there were two sources and produced "Slack and Grain and
+ * ClickUp" the moment there were three. The prompt is prose the model reads; a sentence that
+ * reads as though it were assembled by a loop invites being skimmed like one.
+ */
+function listOf(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
 export function buildHeartbeat(
   core: BrainCore,
   sweepSources: string[] = [],
@@ -196,7 +209,7 @@ export function buildHeartbeat(
       ? []
       : [
           '',
-          `Also look at ${sweepSources.join(' and ')}. These are connected right now, so`,
+          `Also look at ${listOf(sweepSources)}. These are connected right now, so`,
           'the tools are there. Read what has arrived since you last checked and decide',
           'whether any of it is something the user needs from you — a decision waiting on',
           'them, a thread that has gone quiet on their side, something worth writing down',
@@ -275,6 +288,7 @@ export function dueSweepSources(
   const wanted: string[] = []
   if (settings.sweep.slack && connected('slack')) wanted.push('Slack')
   if (settings.sweep.grain && connected('grain')) wanted.push('Grain')
+  if (settings.sweep.clickup && connected('clickup')) wanted.push('ClickUp')
   return wanted
 }
 

@@ -13,7 +13,7 @@ import {
   Trash2,
   Zap
 } from 'lucide-react'
-import type { ScheduledTask, TaskRun } from '@shared/types'
+import type { ScheduledTask, Settings, TaskRun } from '@shared/types'
 import { describeSchedule, type Schedule } from '@shared/schedule'
 import { api, errorMessage, onEvent } from '@/lib/api'
 import { useApp } from '@/store/app'
@@ -35,6 +35,18 @@ import { toast } from '@/components/ui/sonner'
  * turns this off is saying "do not start work on your own" and honouring that for only
  * half of it would be a lie of omission.
  */
+/**
+ * Display names for the sweep sources.
+ *
+ * A table rather than a chain of ternaries: a third source is what turns
+ * `slack ? 'Slack' : 'Grain'` into a silent wrong answer for everything after the first.
+ */
+const SWEEP_LABEL: Record<'slack' | 'grain' | 'clickup', string> = {
+  slack: 'Slack',
+  grain: 'Grain',
+  clickup: 'ClickUp'
+}
+
 export function ScheduledPanel(): React.JSX.Element {
   const settings = useApp((s) => s.settings)
   const updateSettings = useApp((s) => s.updateSettings)
@@ -141,7 +153,14 @@ function MasterSwitch({
   enabled: boolean
   heartbeat: boolean
   quiet: { enabled: boolean; startHour: number; endHour: number } | undefined
-  sweep: { enabled: boolean; slack: boolean; grain: boolean; everyHours: number } | undefined
+  /**
+   * Taken from `Settings` rather than restated.
+   *
+   * It was restated, and that is how a third sweep source became a type error in the panel
+   * instead of a compile error at the declaration: a hand-written copy of a shape in another
+   * file drifts silently until something happens to index it.
+   */
+  sweep: Settings['proactive']['sweep'] | undefined
   onChange: (patch: Parameters<ReturnType<typeof useApp.getState>['updateSettings']>[0]) => Promise<void>
 }): React.JSX.Element {
   return (
@@ -210,7 +229,7 @@ function MasterSwitch({
 
               {sweep.enabled && (
                 <div className="flex items-center gap-3 pl-5">
-                  {(['slack', 'grain'] as const).map((source) => (
+                  {(['slack', 'grain', 'clickup'] as const).map((source) => (
                     <label
                       key={source}
                       className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-muted-foreground"
@@ -225,7 +244,7 @@ function MasterSwitch({
                         }
                         className="size-3 accent-primary"
                       />
-                      {source === 'slack' ? 'Slack' : 'Grain'}
+                      {SWEEP_LABEL[source]}
                     </label>
                   ))}
                 </div>

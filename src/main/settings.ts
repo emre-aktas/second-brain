@@ -72,6 +72,7 @@ export function defaultSettings(workspacePath: string): Settings {
         enabled: true,
         slack: true,
         grain: true,
+        clickup: true,
         everyHours: 4
       }
     },
