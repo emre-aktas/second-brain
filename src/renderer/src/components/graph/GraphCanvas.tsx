@@ -1185,19 +1185,24 @@ export function GraphCanvas({
         const inAttention = weight !== undefined || lit > 0 || examining
 
         // Depth is dimmed as well as shrunk, because on a dark background parallax on its
-        // own reads as movement rather than as distance. Attention overrides it: a node
-        // the user selected, or one the agent is reading, must not be hard to find just
-        // because the orbit happens to have carried it round the back.
+        // own reads as movement rather than as distance.
+        //
+        // Attention cancels it outright rather than softening it. Clamped instead, the best
+        // match in an answer still came out at 85% for the crime of being at the back —
+        // which makes the one node the user was told to look at fainter than a node they
+        // were not, and leaves nothing on the canvas at full strength to anchor the rest.
         const fade =
-          inAttention || id === selectedId
-            ? Math.max(0.85, depthFade(view[i * VIEW_STRIDE + 3], halfDepth))
-            : depthFade(view[i * VIEW_STRIDE + 3], halfDepth)
+          inAttention || id === selectedId ? 1 : depthFade(view[i * VIEW_STRIDE + 3], halfDepth)
 
         // With nothing selected, weight by how well tagged it is; with something selected,
-        // that reading is replaced by the ranking — full strength for the best match, less
+        // that reading is replaced by the ranking — the best match at full strength, less
         // for each one behind it, and a flat 0.2 for everything outside the answer.
+        //
+        // Being read, or selected, outranks the ranking: whatever the agent is on *now* is
+        // the answer to "where is it working", and a rank-four node it happens to be reading
+        // is not the place to be subtle about that.
         const focusAlpha =
-          weight !== undefined ? weight : lit > 0 || examining ? 1 : 0.2
+          lit > 0 || examining || id === selectedId ? 1 : (weight ?? 0.2)
         const alpha = (dimming ? focusAlpha : (prominence.get(id) ?? 1)) * fade
         ctx.globalAlpha = alpha
 
@@ -1384,11 +1389,9 @@ export function GraphCanvas({
         // equal weight the names flattened the graph back out.
         ctx.globalAlpha =
           (dimming
-            ? weight !== undefined
-              ? Math.max(0.25, weight)
-              : lit > 0
-                ? 1
-                : 0.25
+            ? lit > 0 || label.id === selectedId
+              ? 1
+              : (weight ?? 0.25)
             : (prominence.get(label.id) ?? 1)) * label.fade
         ctx.fillStyle =
           lit > 0 ? theme.halo : inAttention || label.id === selectedId ? theme.label : theme.labelMuted
