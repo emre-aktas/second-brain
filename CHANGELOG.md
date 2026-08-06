@@ -8,6 +8,42 @@ load-bearing — `notesFromChangelog` in `src/main/updater.ts` finds a release b
 Keep them as `## <version>` with the newest first. `npm run release` writes the skeleton for a
 new one from the commits since the last release; edit it before pushing.
 
+## 0.3.0
+
+*2026-08-06*
+
+**There is an Integrations panel now, and it works.** The agent could already write an integration
+for a service — read your Figma files, pull from an API — and hand it back for you to approve. What
+was missing was the screen where you approve it. It exists, it is in the sidebar, and an
+integration waiting on you says so in the header.
+
+Each card shows what the thing will be allowed to do *before* you say yes: every operation it can
+call, with the method and the exact path, and the address it will reach. Then one masked field per
+credential it needs, with a link to the page the token comes from. Pasting it saves and tests it in
+one press, and tells you what the service actually answered — including the HTTP status, so a token
+that is wrong looks different from one that is right. Nothing can be turned on until every
+credential it declared is there.
+
+Per credential you can reveal it (only on a press, never by default), rotate it, delete it, and
+give it an expiry date. That last one matters if you use short-lived tokens: the card warns you
+once the date passes, instead of the integration quietly failing the next time something asks.
+
+**Credentials are stored properly.** In the Windows credential store, as before, and where that is
+unavailable they are now encrypted with a local key rather than merely encoded — the panel tells you
+which of the two you are getting. No credential ever reaches the agent: it sees the *name* of a
+token, never its value, and a request that fails with the token quoted back in the error has it
+removed before the agent or the log sees it. Every call an integration makes is recorded with which
+credential it used, and never with the credential.
+
+**The agent can look after them, short of one thing.** It can turn an integration off, forget a
+token, record an expiry date, remove an integration, and open the panel at the right card to tell
+you what to paste. It cannot enter a credential and it cannot turn an integration on — the token is
+yours to paste and the switch is yours to press, and both of those are the reason the rest of this
+is safe to hand over.
+
+**Note names can be turned off.** A button under the zoom controls hides every label on the graph,
+for a screen share or somebody walking past. It stays hidden until you turn it back on.
+
 ## 0.2.0
 
 *2026-08-06*
