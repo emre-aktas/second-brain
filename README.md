@@ -172,11 +172,6 @@ removes the Electron ABI rebuild step entirely, so dev and packaged builds run
 byte-identical engines and packaging needs no native toolchain. FTS5 and JSON1 are
 both present, and the driver sits behind one file if it ever needs swapping.
 
-**Turkish-aware search.** FTS5's `remove_diacritics` only strips combining marks, so
-it never maps dotless `ı` to `i` or `ğ` to `g` — searching "ogrenme" would miss
-"Öğrenme". Both the indexed text and the query are folded through an explicit
-transliteration, so it does not.
-
 **Filenames are composed to NFC, but only on macOS.** The same Turkish characters can
 be encoded two ways, and APFS may hand back either. Left alone, the index and the disk
 disagree about a name and every pass reports the note deleted and recreated. Windows
