@@ -147,6 +147,133 @@ function readIconNode(name, aliasHops = 0) {
   return JSON.parse(json)
 }
 
+/**
+ * Make a subpath safe to concatenate after another one.
+ *
+ * The first moveto of a path is absolute whatever its case — `m19 8` and `M19 8` land in the
+ * same place at the start of a `d`. They stop landing in the same place the moment that path
+ * is appended to another, because then the `m` is relative to wherever the previous one
+ * ended. That is what put a pan of the `scale` glyph outside the 24-unit box: `M12 3v18` ends
+ * at (12,21), so the following `m19 8` moved to (31,29) and the icon drew over the edge of
+ * its node.
+ *
+ * The fix is to restore the origin the segment was written against, *not* to uppercase the
+ * moveto. Coordinates that follow a moveto are implicit linetos of the same case, so
+ * `m19 8 3 8` means "move to (19,8), then line 3 across and 8 down" while `M19 8 3 8` means
+ * "move to (19,8), then line to (3,8)" — a different picture, and the reason the first
+ * attempt at this produced a glyph reaching to x = -3.
+ *
+ * A bare `M0 0` draws nothing: the very next command is another moveto.
+ */
+function anchorSegment(d, name) {
+  const trimmed = d.trim()
+  if (trimmed.startsWith('M')) return trimmed
+  if (trimmed.startsWith('m')) return `M0 0${trimmed}`
+  throw new Error(`${name}: a subpath starts with something other than a moveto: ${trimmed.slice(0, 24)}`)
+}
+
+/**
+ * Rough extent of a path, in its own units.
+ *
+ * Walks the commands tracking the current point, which is the only way to know where a
+ * relative command actually lands. Arcs contribute their endpoint rather than their bulge,
+ * so this is an approximation — deliberately, because it exists to catch a glyph that has
+ * escaped its box by miles, not to measure one that grazes the edge.
+ */
+function extentOf(d) {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let x = 0
+  let y = 0
+  let startX = 0
+  let startY = 0
+
+  const see = (px, py) => {
+    if (px < minX) minX = px
+    if (px > maxX) maxX = px
+    if (py < minY) minY = py
+    if (py > maxY) maxY = py
+  }
+
+  for (const [, letter, argText] of d.matchAll(/([MmLlHhVvCcSsQqTtAaZz])([^MmLlHhVvCcSsQqTtAaZz]*)/g)) {
+    const args = (argText.match(/-?\d*\.?\d+(?:e-?\d+)?/g) ?? []).map(Number)
+    const relative = letter === letter.toLowerCase() && letter !== 'Z' && letter !== 'z'
+
+    switch (letter.toUpperCase()) {
+      case 'M':
+      case 'L':
+      case 'T':
+        for (let i = 0; i + 1 < args.length; i += 2) {
+          x = relative ? x + args[i] : args[i]
+          y = relative ? y + args[i + 1] : args[i + 1]
+          if (letter.toUpperCase() === 'M' && i === 0) {
+            startX = x
+            startY = y
+          }
+          see(x, y)
+        }
+        break
+
+      case 'H':
+        for (const value of args) {
+          x = relative ? x + value : value
+          see(x, y)
+        }
+        break
+
+      case 'V':
+        for (const value of args) {
+          y = relative ? y + value : value
+          see(x, y)
+        }
+        break
+
+      // Control points are included: a curve stays inside their hull, so bounding them
+      // bounds the curve too.
+      case 'C':
+        for (let i = 0; i + 5 < args.length; i += 6) {
+          for (const [dx, dy] of [[args[i], args[i + 1]], [args[i + 2], args[i + 3]], [args[i + 4], args[i + 5]]]) {
+            see(relative ? x + dx : dx, relative ? y + dy : dy)
+          }
+          x = relative ? x + args[i + 4] : args[i + 4]
+          y = relative ? y + args[i + 5] : args[i + 5]
+        }
+        break
+
+      case 'S':
+      case 'Q':
+        for (let i = 0; i + 3 < args.length; i += 4) {
+          for (const [dx, dy] of [[args[i], args[i + 1]], [args[i + 2], args[i + 3]]]) {
+            see(relative ? x + dx : dx, relative ? y + dy : dy)
+          }
+          x = relative ? x + args[i + 2] : args[i + 2]
+          y = relative ? y + args[i + 3] : args[i + 3]
+        }
+        break
+
+      case 'A':
+        for (let i = 0; i + 6 < args.length; i += 7) {
+          x = relative ? x + args[i + 5] : args[i + 5]
+          y = relative ? y + args[i + 6] : args[i + 6]
+          see(x, y)
+        }
+        break
+
+      case 'Z':
+        x = startX
+        y = startY
+        break
+
+      default:
+        break
+    }
+  }
+
+  return { minX, minY, maxX, maxY }
+}
+
 // Deduped: the list is grouped by purpose for readability, and the same icon can
 // legitimately serve two of them.
 const entries = [...new Set(ICONS)].map((name) => {
@@ -154,8 +281,22 @@ const entries = [...new Set(ICONS)].map((name) => {
   const d = node
     .map(([tag, attrs]) => toPath(tag, attrs))
     .filter(Boolean)
+    .map((segment) => anchorSegment(segment, name))
     .join('')
   if (!d) throw new Error(`${name} produced no geometry`)
+
+  // The renderer centres a glyph on lucide's 24-unit box and scales it to fit a circle, so a
+  // glyph that leaves the box draws outside its node. A little slack for arc bulge and for
+  // icons that genuinely touch the edge; anything beyond that is a flattening bug, and it
+  // should fail the build rather than be discovered on screen.
+  const box = extentOf(d)
+  if (box.minX < -1.5 || box.minY < -1.5 || box.maxX > 25.5 || box.maxY > 25.5) {
+    throw new Error(
+      `${name} does not fit lucide's 24-unit box: ` +
+        `x ${box.minX}..${box.maxX}, y ${box.minY}..${box.maxY}`
+    )
+  }
+
   return [name, d]
 })
 

@@ -58,10 +58,18 @@ export function drawNodeIcon(
   const size = radius * 1.28
   const scale = size / 24
 
-  // A constant width on screen, divided back out of the scale. Lucide's own 2 units
-  // would grow with the zoom and fill in the detail of a busy glyph; thinner on a
-  // small circle is what keeps a dumbbell from reading as a blob.
-  const strokePx = radius >= 15 ? 1.75 : 1.45
+  // Proportional, with both ends held.
+  //
+  // Lucide draws 2 units of stroke in a 24-unit box — one twelfth — and that ratio is what
+  // makes its icons look like themselves at any size. Since the box here is `radius * 1.28`
+  // wide, one twelfth of it is `radius * 0.107`, so keeping the ratio *is* keeping lucide's
+  // design. Two constants instead meant the weight was right at one zoom and wrong
+  // everywhere else: at 1.75px a node the size of the panel drew a hairline.
+  //
+  // The floor is legibility — below about 1.4 CSS px antialiasing spreads a stroke across
+  // two pixel rows and takes a chunk of its weight with it. The ceiling stops a glyph
+  // closing up on a node zoomed in past any sensible reading size.
+  const strokePx = Math.min(6, Math.max(1.4, radius * 0.107))
 
   ctx.save()
   ctx.translate(x - size / 2, y - size / 2)
