@@ -64,11 +64,6 @@ export function readGraphTheme(): GraphTheme {
   }
 }
 
-/** Radius for a node, from how connected it is. */
-export function radiusForDegree(degree: number): number {
-  return 4 + Math.min(14, Math.sqrt(degree) * 3.1)
-}
-
 /** Verify the browser can actually paint a resolved token colour. */
 export function canvasSupportsColor(color: string): boolean {
   try {

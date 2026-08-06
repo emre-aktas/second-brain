@@ -13,6 +13,7 @@ import {
 } from 'd3-force-3d'
 import type { Simulation, SimulationLinkDatum, SimulationNodeDatum } from 'd3-force'
 import { seedDepth } from '@shared/graph-3d'
+import { radiusForDegree } from '@shared/node-size'
 
 /**
  * The graph's physics, off the main thread.
@@ -309,7 +310,7 @@ function build(
         .strength((d) => chargeStrengthFor(d, settings))
         .distanceMax(900)
     )
-    .force('collide', forceCollide<SimNode>((d) => radiusFor(d.degree) + 5).iterations(2))
+    .force('collide', forceCollide<SimNode>((d) => radiusForDegree(d.degree) + 5).iterations(2))
     .force('center', forceCenter(0, 0).strength(0.03))
     // Only tags are placed by radius, and gently: it takes the whole set of them
     // out past the notes without deciding where any individual one goes. Notes are
@@ -353,10 +354,6 @@ function build(
  */
 function depthAmplitudeFor(input: WorkerNodeInput): number {
   return input.isTag ? 0 : 260
-}
-
-function radiusFor(degree: number): number {
-  return 4 + Math.min(14, Math.sqrt(degree) * 3.1)
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
@@ -453,7 +450,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       linkForce.links(links)
 
       const collide = simulation.force('collide') as ReturnType<typeof forceCollide<SimNode>>
-      collide?.radius((d: SimNode) => radiusFor(d.degree) + 5)
+      collide?.radius((d: SimNode) => radiusForDegree(d.degree) + 5)
 
       post({ type: 'ready', ids })
       // A nudge, not a relaunch: enough to make room for what arrived.

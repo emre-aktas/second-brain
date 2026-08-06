@@ -11,7 +11,8 @@ import {
   zoomAt,
   type Camera
 } from './camera'
-import { radiusForDegree, readGraphTheme, type GraphTheme } from './theme'
+import { radiusForDegree } from '@shared/node-size'
+import { readGraphTheme, type GraphTheme } from './theme'
 import {
   clampPitch,
   depthFade,
