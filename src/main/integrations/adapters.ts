@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { DETACH_CHILDREN, killTree } from '../util/kill'
 import { join, resolve, sep } from 'node:path'
 import { existsSync } from 'node:fs'
 import type {
@@ -293,6 +294,7 @@ export class ScriptAdapter {
         cwd: join(this.integrationsDir, this.manifest.id),
         env: { ...process.env, ...env },
         windowsHide: true,
+        detached: DETACH_CHILDREN,
         stdio: ['pipe', 'pipe', 'pipe']
       })
 
@@ -304,11 +306,7 @@ export class ScriptAdapter {
         if (done) return
         done = true
         clearTimeout(timer)
-        try {
-          child.kill()
-        } catch {
-          /* already gone */
-        }
+        killTree(child)
         settle(result)
       }
 

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { DETACH_CHILDREN, killTree } from '../util/kill'
 import { createLogger } from '../logger'
 
 const log = createLogger('mcp-client')
@@ -153,6 +154,9 @@ export class McpStdioClient extends McpClient {
       env: { ...process.env, ...this.env },
       ...(this.cwd ? { cwd: this.cwd } : {}),
       windowsHide: true,
+      // An MCP server is usually `npx something`: a node process that spawns another one.
+      // Killing only what we spawned leaves the real server running.
+      detached: DETACH_CHILDREN,
       stdio: ['pipe', 'pipe', 'pipe']
     }) as ChildProcessWithoutNullStreams
 
@@ -197,7 +201,7 @@ export class McpStdioClient extends McpClient {
   }
 
   close(): void {
-    this.child?.kill()
+    killTree(this.child)
     this.child = null
     this.initialized = false
   }

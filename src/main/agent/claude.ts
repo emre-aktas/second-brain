@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { DETACH_CHILDREN, killTree } from '../util/kill'
 import { UsageMeter } from './usage-meter'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -86,6 +87,7 @@ export function runClaude(
     try {
       child = spawn(binary, args, {
         windowsHide: true,
+        detached: DETACH_CHILDREN,
         env: opts.env ?? process.env
       }) as ChildProcessWithoutNullStreams
     } catch (err) {
@@ -348,6 +350,9 @@ export class ClaudeProcess {
     this.child = spawn(this.options.binary, args, {
       cwd: this.options.cwd,
       windowsHide: true,
+      // Its own process group, so stopping it stops the MCP servers it runs and the node
+      // processes under those. See `killTree`.
+      detached: DETACH_CHILDREN,
       env: {
         // Stripped of every Anthropic auth/endpoint override, so the CLI always
         // resolves the user's own signed-in account.
@@ -450,7 +455,9 @@ export class ClaudeProcess {
     } catch {
       /* already gone */
     }
-    this.child.kill()
+    // The tree, not the process. The CLI runs MCP servers of its own, and killing only
+    // what we spawned left those behind every time the agent stopped.
+    killTree(this.child)
     this.child = null
     this.busy = false
   }
