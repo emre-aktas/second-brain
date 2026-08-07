@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentCapability } from '@shared/types'
+import type { EngineCapabilities } from '@shared/engines'
 import { deniedToolsFor, deniedToolsForUnattended } from './prompt'
 import { createLogger } from '../logger'
 
@@ -255,6 +256,8 @@ export interface ClaudeProcessOptions {
   maxBudgetUsd?: number | null
   /** Thinking budget: low | medium | high | xhigh | max. */
   effort?: string | null
+  /** Filled in by the engine factory; defaulted when this class is driven directly. */
+  capabilities?: EngineCapabilities
   /**
    * True for a scheduled run, which nobody is watching.
    *
@@ -290,6 +293,42 @@ export class ClaudeProcess {
 
   get claudeSessionId(): string | null {
     return this.claudeSessionIdValue
+  }
+
+  /**
+   * The same id, under the name every engine answers to.
+   *
+   * Two getters for one field rather than a rename: `claudeSessionId` is what this class has
+   * always called it and what its own frames carry, and the engine-neutral name is what the
+   * manager asks for. Renaming here would churn the file that needs to change least.
+   */
+  get engineSessionId(): string | null {
+    return this.claudeSessionIdValue
+  }
+
+  /**
+   * What this engine can do.
+   *
+   * Supplied by the factory, which is the one place that knows about providers. Defaulted so
+   * the probes that construct this class directly — to test the process lifecycle, not the
+   * engine layer — need no change.
+   */
+  get capabilities(): EngineCapabilities {
+    return (
+      this.options.capabilities ?? {
+        engine: 'claude-cli',
+        providerId: 'claude-cli',
+        model: this.options.model,
+        builtInTools: true,
+        serverSideSessions: true,
+        streamsText: true,
+        reasoning: true,
+        toolCalling: true,
+        accountConnectors: true,
+        metered: false,
+        usageWindows: true
+      }
+    )
   }
 
   get alive(): boolean {

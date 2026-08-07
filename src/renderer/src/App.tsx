@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
+  Cpu,
   CalendarClock,
   FileText,
   MessageSquare,
@@ -15,6 +16,7 @@ import {
 import type { UsageBucketDto } from '@shared/ipc'
 import { activeChat, useApp, type Panel } from '@/store/app'
 import { api, onEvent } from '@/lib/api'
+import type { EngineState } from '@shared/engines'
 import { useReduceMotion } from '@/lib/motion'
 import { cn } from '@/lib/utils'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
@@ -22,6 +24,7 @@ import { ChatPanel } from '@/components/chat/ChatPanel'
 import { NotePanel } from '@/components/panels/NotePanel'
 import { ActivityPanel, SettingsPanel } from '@/components/panels/SidePanels'
 import { IntegrationsPanel } from '@/components/panels/IntegrationsPanel'
+import { EnginePanel } from '@/components/panels/EnginePanel'
 import { ScheduledPanel } from '@/components/panels/ScheduledPanel'
 import { Updates } from '@/components/Updates'
 import { ToolsPanel } from '@/components/panels/ToolsPanel'
@@ -103,6 +106,20 @@ function Shell(): React.JSX.Element {
    * here: the panel itself cannot open itself when it is not mounted.
    */
   useEffect(() => onEvent('integrations:focus', () => setPanel('integrations')), [setPanel])
+
+  /*
+   * Which engine is running, for the footer.
+   *
+   * Re-read on `settings:changed` because that is what a switch broadcasts — without it the
+   * footer would keep naming the previous provider until the window was reloaded, which is the
+   * one moment the user is looking for confirmation that the switch took.
+   */
+  const [engine, setEngine] = useState<EngineState | null>(null)
+  useEffect(() => {
+    const read = (): void => void api.engineState().then(setEngine).catch(() => undefined)
+    read()
+    return onEvent('settings:changed', read)
+  }, [])
   const selectedNodeId = useApp((s) => s.selectedNodeId)
   const selectNode = useApp((s) => s.selectNode)
   const clearFocus = useApp((s) => s.clearFocus)
@@ -398,6 +415,7 @@ function Shell(): React.JSX.Element {
             {panel === 'tools' && <ToolsPanel />}
             {panel === 'tasks' && <ScheduledPanel />}
             {panel === 'integrations' && <IntegrationsPanel />}
+            {panel === 'engine' && <EnginePanel />}
             {panel === 'activity' && <ActivityPanel />}
             {panel === 'settings' && <SettingsPanel />}
           </div>
@@ -448,7 +466,36 @@ function Shell(): React.JSX.Element {
             </span>
           )}
 
-          {usage?.available && (
+          {/*
+            Which engine is answering, when it is not the one the app was built on.
+            
+            The readouts to the right of this are all Claude's — plan windows reconstructed from
+            its own transcripts, a subscription tier — and on any other provider they are either
+            absent or misleading. So the footer names the engine instead, which is the thing a
+            user actually needs to see at a glance after switching: that the model they picked is
+            the model answering.
+          */}
+          {/*
+            Read through optional chaining, and that is not defensive clutter: a reply whose shape
+            is not what this expects must not take the window down with it. It already did once —
+            six probes stub every channel with `[]`, which is truthy, so `capabilities.engine`
+            threw and the whole renderer went blank rather than the footer losing one readout.
+          */}
+          {engine?.capabilities?.engine !== undefined && engine.capabilities.engine !== 'claude-cli' && (
+            <Tooltip content={`Answering with ${engine.capabilities.providerId}. Open the Engine tab to change it.`}>
+              <button
+                type="button"
+                onClick={() => setPanel('engine')}
+                className="flex items-center gap-1.5 transition-colors duration-150 hover:text-foreground active:scale-[0.96]"
+              >
+                <Cpu className="size-3" />
+                <span className="max-w-[220px] truncate">{engine.capabilities.model}</span>
+                {engine.capabilities.metered && <span className="text-warning">metered</span>}
+              </button>
+            </Tooltip>
+          )}
+
+          {usage?.available && engine?.capabilities?.usageWindows !== false && (
             <Tooltip content={usage.caveat ?? 'Plan usage, as reported by Claude Code.'}>
               <span className="cursor-default tabular-nums">
                 {usage.session && <UsageReadout label="5h" bucket={usage.session} />}
@@ -484,6 +531,10 @@ const PANELS: { id: Panel; label: string; Icon: LucideIcon }[] = [
   // integration the agent registered had nowhere to be approved. `Panel` has always included
   // 'integrations' and `IntegrationsPanel` has always been exported; nothing mounted it.
   { id: 'integrations', label: 'Integrations', Icon: Plug },
+  // Its own entry rather than a section of Settings: choosing the engine has a provider, a
+  // credential, a model and an endpoint to it, and it is the one screen where getting it wrong
+  // means the app does nothing at all.
+  { id: 'engine', label: 'Engine', Icon: Cpu },
   { id: 'activity', label: 'Activity', Icon: Activity },
   { id: 'settings', label: 'Settings', Icon: Settings }
 ]

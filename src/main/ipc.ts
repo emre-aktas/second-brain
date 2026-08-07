@@ -19,6 +19,18 @@ import { interpolate } from '@shared/bindings'
 import { claudeAuthStatus, claudeVersion, resolveClaudeBinary, runClaude } from './agent/claude'
 import { recordToolError } from './toolErrors'
 import { clearLogTail, createLogger, logTail } from './logger'
+import { ENGINE_PROVIDERS, capabilityNotes, providerById } from '@shared/engines'
+import type { EngineState } from '@shared/engines'
+import {
+  baseUrlFor,
+  capabilitiesFor,
+  effortFor,
+  engineReadiness,
+  modelFor,
+  modelsFor,
+  resolveCodexBinary
+} from './agent/engines/factory'
+import { forgetModels } from './agent/engines/catalogue'
 
 const log = createLogger('ipc')
 
@@ -168,6 +180,108 @@ export function registerIpc(ctx: IpcContext): void {
         : null
     }
     return cachedStatus
+  }
+
+  /**
+   * The whole Engine tab in one read.
+   *
+   * Assembled here rather than in the renderer because two of the three questions can only be
+   * answered in the main process: whether a credential exists (the renderer must never see one)
+   * and whether a CLI is installed.
+   */
+  const engineState = (): EngineState => {
+    const selectedId = core.settings.engine.providerId
+    const secret = (ref: string): string | undefined => integrations.secrets.get(ref)
+
+    const providers = ENGINE_PROVIDERS.map((provider) => {
+      const installed =
+        provider.engine === 'claude-cli'
+          ? resolveClaudeBinary() !== null
+          : provider.engine === 'codex-cli'
+            ? resolveCodexBinary() !== null
+            : true
+      return {
+        provider,
+        installed,
+        configured: !provider.needsKey || Boolean(provider.secretRef && secret(provider.secretRef)),
+        model: modelFor(core.settings, provider.id),
+        baseUrl: baseUrlFor(core.settings, provider.id),
+        selected: provider.id === selectedId
+      }
+    })
+
+    /*
+     * The configured model, and nothing standing in for it.
+     *
+     * `|| core.settings.model` here was the same mistake as in the manager, one layer up: the
+     * panel showed "opus" under Codex and under DeepSeek, which made an unconfigured engine look
+     * configured — and made the readiness check below inspect a value the turn would never use.
+     */
+    const model = modelFor(core.settings, selectedId)
+    const capabilities = capabilitiesFor({
+      providerId: selectedId,
+      model: model || (selectedId === 'claude-cli' ? core.settings.model : '')
+    })
+    const readiness = engineReadiness({ settings: core.settings, secret, model })
+
+    return {
+      providers,
+      selectedProviderId: selectedId,
+      capabilities,
+      effort: effortFor(core.settings, selectedId),
+      blocked: readiness.ok ? null : readiness.reason,
+      notes: capabilityNotes(capabilities)
+    }
+  }
+
+  /**
+   * One real request against the provider, so "it works" is shown rather than claimed.
+   *
+   * The same reasoning as the integrations panel: saving a key and being told it was saved says
+   * nothing about whether the service accepts it. For an API provider the cheapest honest probe
+   * is the model list, which is authenticated and costs no tokens; for a CLI it is whether the
+   * binary is there at all.
+   */
+  const engineTest = async (
+    providerId: string,
+    model?: string
+  ): Promise<{ ok: boolean; message: string }> => {
+    const provider = providerById(providerId)
+    if (!provider) return { ok: false, message: `Unknown engine "${providerId}".` }
+
+    if (provider.engine === 'claude-cli') {
+      const binary = resolveClaudeBinary()
+      return binary
+        ? { ok: true, message: `Claude Code found at ${binary}.` }
+        : { ok: false, message: 'The Claude CLI is not on this machine.' }
+    }
+
+    if (provider.engine === 'codex-cli') {
+      const binary = resolveCodexBinary()
+      return binary
+        ? { ok: true, message: `Codex found at ${binary}.` }
+        : { ok: false, message: 'The Codex CLI is not on this machine.' }
+    }
+
+    const result = await modelsFor(
+      core.settings,
+      providerId,
+      (ref) => integrations.secrets.get(ref),
+      true
+    )
+    if (result.error) return { ok: false, message: result.error }
+    if (result.models.length === 0) {
+      return { ok: false, message: 'The endpoint answered, but offered no models.' }
+    }
+
+    const chosen = model ? result.models.find((entry) => entry.id === model) : null
+    const suffix = chosen
+      ? chosen.supportsTools
+        ? ` ${chosen.label} can call tools, so the agent can use your notes.`
+        : ` ${chosen.label} does not advertise tool calling — the agent would only be able to talk.`
+      : ''
+
+    return { ok: true, message: `Connected. ${result.models.length} model(s) available.${suffix}` }
   }
 
   const budgetStatus = (): ApiResult<'agent:budget'> => {
@@ -537,6 +651,65 @@ export function registerIpc(ctx: IpcContext): void {
     },
     'update:openRelease': () => updater.openRelease(),
     'update:whatsNew': () => updater.whatsNew(),
+
+    /* ------------------------------------------------------- the model engine */
+
+    'engine:state': () => engineState(),
+
+    'engine:models': ({ providerId, force }) =>
+      modelsFor(core.settings, providerId, (ref) => integrations.secrets.get(ref), force === true),
+
+    'engine:select': ({ providerId, model, baseUrl, effort }) => {
+      const provider = providerById(providerId)
+      if (!provider) throw new Error(`unknown engine "${providerId}"`)
+
+      /*
+       * Only the engine changes.
+       *
+       * The vault, the chat history, the saved tools and the schedule are untouched by this —
+       * they are the app's, not the provider's. A conversation started on one engine continues
+       * on another because the history is replayed from our own store rather than resumed from
+       * theirs, and a tool or a task keeps the model and effort it was saved with.
+       */
+      const patch: Parameters<typeof core.updateSettings>[0] = {
+        engine: { providerId }
+      }
+      if (model !== undefined) {
+        patch.engine!.models = { ...core.settings.engine.models, [providerId]: model }
+      }
+      if (effort !== undefined) {
+        patch.engine!.efforts = { ...core.settings.engine.efforts, [providerId]: effort }
+      }
+      if (baseUrl !== undefined) {
+        patch.engine!.baseUrls = { ...core.settings.engine.baseUrls, [providerId]: baseUrl }
+        // A different endpoint is a different catalogue.
+        forgetModels(baseUrlFor(core.settings, providerId))
+      }
+
+      core.updateSettings(patch)
+      log.info(`engine is now ${providerId}${model ? ` (${model})` : ''}`)
+      return engineState()
+    },
+
+    'engine:setKey': ({ providerId, key }) => {
+      const provider = providerById(providerId)
+      if (!provider?.secretRef) throw new Error(`${providerId} takes no key`)
+      // Trimmed, like every other credential this app stores: a key copied from a web page
+      // carries a trailing newline more often than not, and the 401 it causes looks exactly
+      // like a wrong key.
+      integrations.setSecret(provider.secretRef, key.trim(), null, `engine:${providerId}`)
+      // The catalogue was fetched unauthenticated or with the old key; it may differ now.
+      forgetModels(baseUrlFor(core.settings, providerId))
+      return engineState()
+    },
+
+    'engine:clearKey': ({ providerId }) => {
+      const provider = providerById(providerId)
+      if (provider?.secretRef) integrations.deleteSecret(provider.secretRef)
+      return engineState()
+    },
+
+    'engine:test': async ({ providerId, model }) => engineTest(providerId, model),
 
     /* -------------------------------------------------------- graph, notes */
 

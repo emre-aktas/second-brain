@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import type { AgentEffort, IntegrationRecord, Suggestion } from '@shared/types'
 import { EFFORT_OPTIONS, MODEL_OPTIONS } from '@shared/types'
 import type { PresetDto } from '@shared/ipc'
@@ -510,164 +511,26 @@ export function SettingsPanel(): React.JSX.Element {
           <Separator />
 
           <section>
-            <SectionTitle>Agent</SectionTitle>
-            <Row label="Claude CLI">
-              <span className={cn('text-[12px]', bootstrap.agent.available ? 'text-success' : 'text-destructive')}>
-                {bootstrap.agent.version ?? 'not found'}
-              </span>
-            </Row>
-            {bootstrap.agent.auth && (
-              <>
-                <Row label="Signed in as">
-                  <span className="text-[12px] text-muted-foreground">
-                    {bootstrap.agent.auth.email ?? 'unknown'}
-                  </span>
-                </Row>
-                <Row label="Billing">
-                  <span
-                    className={cn(
-                      'text-[12px]',
-                      bootstrap.agent.auth.onSubscription ? 'text-success' : 'text-warning'
-                    )}
-                  >
-                    {bootstrap.agent.auth.onSubscription
-                      ? `${bootstrap.agent.auth.subscriptionType ?? 'subscription'} plan`
-                      : 'metered API credits'}
-                  </span>
-                </Row>
-                <p className="mb-1 mt-0.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-                  {bootstrap.agent.auth.onSubscription
-                    ? 'The agent runs your local Claude Code login, so usage counts against this plan. API-key and custom-endpoint environment variables are stripped before the CLI starts, so it cannot fall back to metered credits.'
-                    : 'The CLI is authenticating with an API key, which is billed per token. Run `claude auth login` to switch it to your subscription.'}
-                </p>
-              </>
-            )}
-            <Row label="Model" hint={MODEL_OPTIONS.find((m) => m.id === settings.model)?.hint}>
-              <NativeSelect
-                value={settings.model}
-                onChange={(model) => void updateSettings({ model })}
-                options={MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label }))}
-              />
-            </Row>
-            <Row
-              label="Thinking"
-              hint={EFFORT_OPTIONS.find((e) => e.id === settings.effort)?.hint}
+            <SectionTitle>Model engine</SectionTitle>
+            {/*
+              Moved out, not deleted. Which model answers, what it costs and what plan it draws on
+              are all properties of the *engine*, and they belong beside the choice of engine
+              rather than in a list of app preferences — half of them are meaningless when the
+              engine is not Claude, and leaving them here made Settings look like it was still in
+              charge of something the Engine tab now owns.
+            */}
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
+              The model, its thinking budget, spend caps and plan usage all live in the Engine tab
+              now — they belong to whichever provider is running the agent.
+            </p>
+            <Button
+              size="xs"
+              variant="outline"
+              className="mt-2"
+              onClick={() => useApp.getState().setPanel('engine')}
             >
-              <NativeSelect
-                value={settings.effort}
-                onChange={(effort) => void updateSettings({ effort: effort as AgentEffort })}
-                options={EFFORT_OPTIONS.map((e) => ({ value: e.id, label: e.label }))}
-              />
-            </Row>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-              A model or thinking change applies to the next conversation you start, or when you
-              switch a conversation's mode.
-            </p>
-          </section>
-
-          <Separator />
-
-          <section>
-            <SectionTitle>Usage limits</SectionTitle>
-
-            {budget?.onSubscription && settings.budget.mode === 'auto' && (
-              <p className="mb-2 rounded-md border border-success/25 bg-success/8 px-2.5 py-2 text-[11px] leading-relaxed text-success text-pretty">
-                Running on your Claude plan, so there is no per-token charge to cap. Spend caps stand
-                down automatically and the usage windows below show your real limits instead.
-              </p>
-            )}
-
-            <Row
-              label="Spend caps"
-              hint="Only relevant when the CLI bills metered API credits"
-            >
-              <NativeSelect
-                value={settings.budget.mode}
-                onChange={(mode) =>
-                  void updateSettings({
-                    budget: { ...settings.budget, mode: mode as 'auto' | 'always' | 'off' }
-                  })
-                }
-                options={[
-                  { value: 'auto', label: 'Only on API credits' },
-                  { value: 'always', label: 'Always' },
-                  { value: 'off', label: 'Never' }
-                ]}
-              />
-            </Row>
-
-            {settings.budget.mode !== 'off' && (
-              <>
-                <Row label="Daily cap">
-                  <NumberInput
-                    value={settings.budget.dailyLimitUsd}
-                    step={0.25}
-                    min={0.25}
-                    onChange={(dailyLimitUsd) =>
-                      void updateSettings({ budget: { ...settings.budget, dailyLimitUsd } })
-                    }
-                  />
-                </Row>
-                <Row label="Per-turn cap">
-                  <NumberInput
-                    value={settings.budget.perTurnLimitUsd}
-                    step={0.05}
-                    min={0.05}
-                    onChange={(perTurnLimitUsd) =>
-                      void updateSettings({ budget: { ...settings.budget, perTurnLimitUsd } })
-                    }
-                  />
-                </Row>
-                {budget?.enabled && (
-                  <div className="mt-1.5">
-                    <div className="mb-1 flex items-baseline justify-between text-[11px]">
-                      <span className="text-muted-foreground">Used today</span>
-                      <span className="tabular-nums text-foreground">
-                        {budget.spentToday.toFixed(2)} / {budget.dailyLimitUsd.toFixed(2)}
-                      </span>
-                    </div>
-                    <Progress
-                      value={Math.min(100, (budget.spentToday / Math.max(0.01, budget.dailyLimitUsd)) * 100)}
-                      tone={budget.blocked ? 'danger' : budget.spentToday / budget.dailyLimitUsd > 0.7 ? 'warning' : 'accent'}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-
-            {usage?.available && (
-              <div className="mt-3 flex flex-col gap-2.5 border-t border-border/60 pt-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Plan usage
-                </p>
-                {usage.session && <UsageRow label="Current session (5h)" bucket={usage.session} />}
-                {usage.week && <UsageRow label="This week" bucket={usage.week} />}
-                {usage.weekByModel
-                  .filter((entry) => entry.percent > 0)
-                  .map((entry) => (
-                    <UsageRow
-                      key={entry.model}
-                      label={`This week · ${entry.model}`}
-                      bucket={{ percent: entry.percent, resetsAt: null }}
-                    />
-                  ))}
-                {usage.caveat && (
-                  <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">
-                    {usage.caveat}
-                  </p>
-                )}
-              </div>
-            )}
-
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-              The daily cap is the real guard: no turn starts once it is reached. The per-turn cap is
-              passed to the CLI, which stops a turn from continuing past it — it cannot make a single
-              step cheaper, so one turn can still land slightly over.
-            </p>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-              Neither changes how your organisation is billed. To stop credit spend outright, an
-              admin has to turn off extra usage in the Anthropic Console.
-            </p>
+              Open the Engine tab
+            </Button>
           </section>
 
           <Separator />
@@ -1047,6 +910,208 @@ function UpdateCheck(): React.JSX.Element {
         {state === 'found' && 'A new version is available — see the footer'}
         {state === 'failed' && 'Could not reach the release feed'}
       </span>
+    </div>
+  )
+}
+
+/**
+ * The parts of the old Settings screen that only ever described Claude.
+ *
+ * Kept here because every helper they use — `Row`, `SectionTitle`, `UsageRow`, the model and
+ * effort tables — lives in this file, and rendered from the Engine tab, which is where the
+ * provider they describe is chosen. Moving the markup rather than rewriting it means the
+ * spend caps and the plan windows behave exactly as they did; only their address changed.
+ *
+ * Shown for the Claude engine alone. On any other provider the CLI version, the plan and the
+ * usage windows are answers to questions nobody asked.
+ */
+export function ClaudeEngineDetails(): React.JSX.Element | null {
+  const settings = useApp((s) => s.settings)
+  const bootstrap = useApp((s) => s.bootstrap)
+  const updateSettings = useApp((s) => s.updateSettings)
+  const budget = useApp((s) => s.budget)
+  const usage = useApp((s) => s.usage)
+
+  if (!settings || !bootstrap) return null
+
+  return (
+    <div className="flex flex-col gap-4">
+          <section>
+            <SectionTitle>Agent</SectionTitle>
+            <Row label="Claude CLI">
+              <span className={cn('text-[12px]', bootstrap.agent.available ? 'text-success' : 'text-destructive')}>
+                {bootstrap.agent.version ?? 'not found'}
+              </span>
+            </Row>
+            {bootstrap.agent.auth && (
+              <>
+                <Row label="Signed in as">
+                  <span className="text-[12px] text-muted-foreground">
+                    {bootstrap.agent.auth.email ?? 'unknown'}
+                  </span>
+                </Row>
+                <Row label="Billing">
+                  <span
+                    className={cn(
+                      'text-[12px]',
+                      bootstrap.agent.auth.onSubscription ? 'text-success' : 'text-warning'
+                    )}
+                  >
+                    {bootstrap.agent.auth.onSubscription
+                      ? `${bootstrap.agent.auth.subscriptionType ?? 'subscription'} plan`
+                      : 'metered API credits'}
+                  </span>
+                </Row>
+                <p className="mb-1 mt-0.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
+                  {bootstrap.agent.auth.onSubscription
+                    ? 'The agent runs your local Claude Code login, so usage counts against this plan. API-key and custom-endpoint environment variables are stripped before the CLI starts, so it cannot fall back to metered credits.'
+                    : 'The CLI is authenticating with an API key, which is billed per token. Run `claude auth login` to switch it to your subscription.'}
+                </p>
+              </>
+            )}
+            <Row label="Model" hint={MODEL_OPTIONS.find((m) => m.id === settings.model)?.hint}>
+              <NativeSelect
+                value={settings.model}
+                onChange={(model) => void updateSettings({ model })}
+                options={MODEL_OPTIONS.map((m) => ({ value: m.id, label: m.label }))}
+              />
+            </Row>
+            <Row
+              label="Thinking"
+              hint={EFFORT_OPTIONS.find((e) => e.id === settings.effort)?.hint}
+            >
+              <NativeSelect
+                value={settings.effort}
+                onChange={(effort) => void updateSettings({ effort: effort as AgentEffort })}
+                options={EFFORT_OPTIONS.map((e) => ({ value: e.id, label: e.label }))}
+              />
+            </Row>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground text-pretty">
+              A model or thinking change applies to the next conversation you start, or when you
+              switch a conversation's mode.
+            </p>
+          </section>
+
+          <Separator />
+
+          <section>
+            <SectionTitle>Usage limits</SectionTitle>
+
+            {budget?.onSubscription && settings.budget.mode === 'auto' && (
+              <p className="mb-2 rounded-md border border-success/25 bg-success/8 px-2.5 py-2 text-[11px] leading-relaxed text-success text-pretty">
+                Running on your Claude plan, so there is no per-token charge to cap. Spend caps stand
+                down automatically and the usage windows below show your real limits instead.
+              </p>
+            )}
+
+            <Row
+              label="Spend caps"
+              hint="Only relevant when the CLI bills metered API credits"
+            >
+              <NativeSelect
+                value={settings.budget.mode}
+                onChange={(mode) =>
+                  void updateSettings({
+                    budget: { ...settings.budget, mode: mode as 'auto' | 'always' | 'off' }
+                  })
+                }
+                options={[
+                  { value: 'auto', label: 'Only on API credits' },
+                  { value: 'always', label: 'Always' },
+                  { value: 'off', label: 'Never' }
+                ]}
+              />
+            </Row>
+
+            {settings.budget.mode !== 'off' && (
+              <>
+                <Row label="Daily cap">
+                  <NumberInput
+                    value={settings.budget.dailyLimitUsd}
+                    step={0.25}
+                    min={0.25}
+                    onChange={(dailyLimitUsd) =>
+                      void updateSettings({ budget: { ...settings.budget, dailyLimitUsd } })
+                    }
+                  />
+                </Row>
+                <Row label="Per-turn cap">
+                  <NumberInput
+                    value={settings.budget.perTurnLimitUsd}
+                    step={0.05}
+                    min={0.05}
+                    onChange={(perTurnLimitUsd) =>
+                      void updateSettings({ budget: { ...settings.budget, perTurnLimitUsd } })
+                    }
+                  />
+                </Row>
+                {budget?.enabled && (
+                  <div className="mt-1.5">
+                    <div className="mb-1 flex items-baseline justify-between text-[11px]">
+                      <span className="text-muted-foreground">Used today</span>
+                      <span className="tabular-nums text-foreground">
+                        {budget.spentToday.toFixed(2)} / {budget.dailyLimitUsd.toFixed(2)}
+                      </span>
+                    </div>
+                    <Progress
+                      value={Math.min(100, (budget.spentToday / Math.max(0.01, budget.dailyLimitUsd)) * 100)}
+                      tone={budget.blocked ? 'danger' : budget.spentToday / budget.dailyLimitUsd > 0.7 ? 'warning' : 'accent'}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            {usage?.available && (
+              <div className="mt-3 flex flex-col gap-2.5 border-t border-border/60 pt-3">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Plan usage
+                </p>
+                {usage.session && <UsageRow label="Current session (5h)" bucket={usage.session} />}
+                {usage.week && <UsageRow label="This week" bucket={usage.week} />}
+                {usage.weekByModel
+                  .filter((entry) => entry.percent > 0)
+                  .map((entry) => (
+                    <UsageRow
+                      key={entry.model}
+                      label={`This week · ${entry.model}`}
+                      bucket={{ percent: entry.percent, resetsAt: null }}
+                    />
+                  ))}
+                {usage.caveat && (
+                  <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">
+                    {usage.caveat}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/*
+              Folded away, not deleted.
+
+              Both paragraphs are true and worth reading once — the per-turn cap cannot make a
+              step cheaper, and neither cap changes how the organisation is billed. But this
+              moved into the Engine tab, where the reason to visit is choosing an engine, and
+              two paragraphs of billing prose under a control most people never touch pushed
+              everything else down the page. `<details>` costs a click to read and nothing to
+              skip, which is the right trade for a footnote.
+            */}
+            <details className="group mt-2">
+              <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground">
+                <ChevronRight className="size-3 transition-transform duration-150 group-open:rotate-90" />
+                What the caps do, exactly
+              </summary>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
+                The daily cap is the real guard: no turn starts once it is reached. The per-turn cap
+                is passed to the CLI, which stops a turn from continuing past it — it cannot make a
+                single step cheaper, so one turn can still land slightly over.
+              </p>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
+                Neither changes how your organisation is billed. To stop credit spend outright, an
+                admin has to turn off extra usage in the Anthropic Console.
+              </p>
+            </details>
+          </section>
     </div>
   )
 }

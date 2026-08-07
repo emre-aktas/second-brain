@@ -815,6 +815,34 @@ export const EFFORT_OPTIONS: { id: AgentEffort; label: string; hint: string }[] 
 
 export interface Settings {
   workspacePath: string
+  /**
+   * Which model engine runs the agent.
+   *
+   * `model` and `effort` above stay where they are and keep meaning what they meant — the app
+   * has one vocabulary for "which model" and "how hard to think", and each engine maps it to
+   * its own. That is what lets the engine change without touching a saved tool or a scheduled
+   * task: both already carry a model and an effort, and both still mean something afterwards.
+   *
+   * Nothing about the vault, the chat history, the tools or the schedule lives here. Changing
+   * engine changes who answers, and nothing else.
+   */
+  engine: {
+    /** A provider id from `ENGINE_PROVIDERS`, or one the user added. */
+    providerId: string
+    /** Per provider, so switching back and forth does not lose the model you had chosen. */
+    models: Record<string, string>
+    /** Overrides the provider's own, for `custom` and for a self-hosted gateway. */
+    baseUrls: Record<string, string>
+    /**
+     * How hard to think, per provider, as that provider names it.
+     *
+     * A plain string rather than `AgentEffort` because the tiers are not universal: Codex
+     * publishes six for its flagship, including `ultra`, which the app's own union does not
+     * have and should not grow — it is Codex's vocabulary, not the app's. Empty means "use
+     * whatever the engine defaults to", which for Codex is the level in its own config.
+     */
+    efforts: Record<string, string>
+  }
   model: string
   effort: AgentEffort
   /** Capability tier used for normal chat turns. */

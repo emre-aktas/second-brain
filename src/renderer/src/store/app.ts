@@ -26,7 +26,15 @@ import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toast } from '@/components/ui/sonner'
 import { configureSound, cue } from '@/lib/sound'
 
-export type Panel = 'chat' | 'note' | 'tools' | 'tasks' | 'activity' | 'integrations' | 'settings'
+export type Panel =
+  | 'chat'
+  | 'note'
+  | 'tools'
+  | 'tasks'
+  | 'activity'
+  | 'integrations'
+  | 'engine'
+  | 'settings'
 
 /** Text streaming in for a message that has not been finalised yet. */
 interface StreamingMessage {

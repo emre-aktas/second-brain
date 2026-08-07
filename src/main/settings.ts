@@ -33,6 +33,14 @@ export function defaultSettings(workspacePath: string): Settings {
     chat: {
       showToolActivity: false
     },
+    engine: {
+      // The engine the app was built on, and the only one that needs no setup: the user has
+      // already signed the CLI in, it brings its own tools, and it spends nothing extra.
+      providerId: 'claude-cli',
+      models: {},
+      baseUrls: {},
+      efforts: {}
+    },
     graph: {
       // Off. A tag sits on the rim with edges crossing the whole canvas, so on a vault
       // with any history the tags are most of what a first look at the graph shows —

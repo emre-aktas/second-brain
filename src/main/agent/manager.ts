@@ -23,6 +23,14 @@ import {
 import { buildSystemPrompt } from './prompt'
 import { ToolHost } from './toolhost'
 import { buildBrainTools, type IntegrationBridge } from './tools'
+import type { AgentEngine } from './engine'
+import {
+  capabilitiesFor,
+  createEngine,
+  effortFor,
+  engineReadiness,
+  modelFor
+} from './engines/factory'
 import type { UsageTracker } from '../usage/usage'
 import { QuestionBroker } from './questions'
 import type { ToolPreviewer } from '../toolPreview'
@@ -32,14 +40,23 @@ const log = createLogger('agent')
 
 const IDLE_SHUTDOWN_MS = 15 * 60_000
 
+/**
+ * How much of a conversation is replayed to an engine that cannot resume.
+ *
+ * Enough for the thread to make sense, bounded because every turn pays for all of it again.
+ * The vault is the memory that matters and the agent can search it; the chat is context, not
+ * the record.
+ */
+const MAX_REPLAYED_TURNS = 40
+
 interface Runtime {
   sessionId: string
-  proc: ClaudeProcess
+  proc: AgentEngine
   capability: AgentCapability
   /** What this process was spawned with. Both are fixed at spawn, so a turn that
    *  wants different ones needs a fresh process. */
   model: string
-  effort: AgentEffort
+  effort: string
   /** Claude's own id for the last assistant message we opened. */
   lastAssistantMessageId: string | null
   /** Our message id keyed by Claude's message id. */
@@ -83,6 +100,14 @@ export class AgentManager {
   onTaskChanged: ((taskId: string) => void) | null = null
   /** Set by the bootstrap; lets the agent see a rendering of what it built. */
   previewer: ToolPreviewer | null = null
+  /**
+   * Reads an engine's API key out of the secret vault.
+   *
+   * Injected rather than imported: the vault belongs to the integration registry, and reaching
+   * for it from here would be a require cycle in the CJS main bundle. Keys live in the vault
+   * and never in settings.json, which also means the redactor already covers them.
+   */
+  secretReader: ((ref: string) => string | undefined) | null = null
   private binary: string | null = null
   private idleTimer: NodeJS.Timeout | null = null
 
@@ -151,8 +176,101 @@ export class AgentManager {
     this.toolHost.stop()
   }
 
+  /**
+   * Whether a turn could run at all.
+   *
+   * Asked of the *selected* engine rather than of the Claude binary. The app used to be able to
+   * assume those were the same question; reporting "no agent" because the Claude CLI is absent,
+   * while a perfectly configured OpenRouter key sits in the vault, would be the first thing to
+   * break for someone who never installed it.
+   */
   get available(): boolean {
-    return this.binary !== null
+    return this.readiness().ok
+  }
+
+  /** Why a turn cannot run, in a sentence the user can act on. */
+  readiness(): { ok: boolean; reason: string | null } {
+    return engineReadiness({
+      settings: this.core.settings,
+      secret: (ref) => this.secretReader?.(ref),
+      model: modelFor(this.core.settings, this.core.settings.engine.providerId)
+    })
+  }
+
+  /**
+   * The model this turn runs on.
+   *
+   * `settings.model` is the *Claude* model name and always has been — "opus", "sonnet". Handing
+   * that to DeepSeek is exactly what happened on the first real switch: a 400 saying the
+   * supported names are deepseek-v4-pro or deepseek-v4-flash, "but you passed opus".
+   *
+   * So the engine's own choice wins, and an override is only honoured for the CLI engines. A
+   * model pinned on a saved tool or a scheduled task is a *Claude* model name — it was chosen
+   * when that was the only engine — and it means nothing to an API provider. Ignoring it there
+   * keeps the tool working rather than failing with a name the provider has never heard of.
+   */
+  private resolveModel(override?: string | null): string {
+    const providerId = this.core.settings.engine.providerId
+    const configured = modelFor(this.core.settings, providerId)
+
+    /*
+     * `settings.model` is the *Claude* model name — "opus", "sonnet" — and it is not a fallback
+     * for anything else. Treating it as one is what sent `opus` to DeepSeek and got back "the
+     * supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed opus".
+     * The empty string is the honest answer for a provider with nothing chosen, and readiness
+     * turns that into a sentence rather than a request.
+     */
+    if (providerId === 'claude-cli') return override ?? (configured || this.core.settings.model)
+
+    // A model pinned on a saved tool or a scheduled task is a Claude name, chosen when that was
+    // the only engine, so it is ignored here rather than forwarded to a provider that has never
+    // heard of it.
+    return configured
+  }
+
+  /**
+   * How hard to think, in the selected engine's own vocabulary.
+   *
+   * The same shape as `resolveModel` and for the same reason: the app's `AgentEffort` tiers are
+   * the *Claude CLI's* tiers, and handing "high" to a provider that publishes its own set is the
+   * model-name bug again in a second field. Codex enumerates six levels for its flagship —
+   * including `ultra`, which this app's union does not have — and an empty answer means "use the
+   * level in your own Codex config", which is always accepted.
+   *
+   * A per-tool or per-task effort is a Claude tier, chosen when that was the only engine, so it
+   * is honoured only there.
+   */
+  private resolveEffort(override?: AgentEffort | null): string {
+    const providerId = this.core.settings.engine.providerId
+    if (providerId === 'claude-cli') return override ?? this.core.settings.effort
+    return effortFor(this.core.settings, providerId)
+  }
+
+  /**
+   * The conversation so far, for an engine that cannot resume one.
+   *
+   * Text only, and capped. A provider with no server-side session is sent the history on every
+   * turn, so this is the whole cost model of that engine — and an unbounded replay of a chat
+   * that has been running for a month is a bill rather than a feature. Tool calls and their
+   * results are deliberately left out: they are the *middle* of previous turns, they are by far
+   * the bulkiest part of a transcript, and the conclusions the agent drew from them are already
+   * in the text it wrote.
+   */
+  private historyFor(sessionId: string): { role: 'user' | 'assistant'; text: string }[] {
+    const messages = this.core.chat.listMessages(sessionId)
+    const out: { role: 'user' | 'assistant'; text: string }[] = []
+
+    for (const message of messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') continue
+      const text = message.blocks
+        .filter((block): block is Extract<ChatBlock, { type: 'text' }> => block.type === 'text')
+        .map((block) => block.text)
+        .join('\n')
+        .trim()
+      if (text) out.push({ role: message.role, text })
+    }
+
+    return out.slice(-MAX_REPLAYED_TURNS)
   }
 
   /* ---------------------------------------------------------------- turns */
@@ -225,11 +343,8 @@ export class AgentManager {
   }
 
   async send(text: string, options: AgentTurnOptions = {}): Promise<{ sessionId: string }> {
-    if (!this.binary) {
-      throw new Error(
-        'The Claude CLI could not be found. Install Claude Code and make sure `claude` is on your PATH.'
-      )
-    }
+    const ready = this.readiness()
+    if (!ready.ok) throw new Error(ready.reason ?? 'No model engine is configured.')
 
     // Checked before anything is spawned, so an exhausted budget costs nothing.
     const budget = this.core.settings.budget
@@ -267,8 +382,8 @@ export class AgentManager {
     const runtime = this.ensureRuntime(
       session.id,
       capability,
-      options.model ?? this.core.settings.model,
-      options.effort ?? this.core.settings.effort,
+      this.resolveModel(options.model),
+      this.resolveEffort(options.effort),
       options.unattended === true
     )
 
@@ -349,8 +464,8 @@ export class AgentManager {
     this.ensureRuntime(
       sessionId,
       capability,
-      this.core.settings.model,
-      this.core.settings.effort,
+      this.resolveModel(),
+      this.resolveEffort(),
       // Changing tier is something the user did, so the replacement is attended.
       false
     )
@@ -405,7 +520,7 @@ export class AgentManager {
     sessionId: string,
     capability: AgentCapability,
     model: string,
-    effort: AgentEffort,
+    effort: string,
     unattended: boolean
   ): Runtime {
     const existing = this.runtimes.get(sessionId)
@@ -434,24 +549,54 @@ export class AgentManager {
       vaultDir: this.core.paths.vaultDir,
       integrationsDir: this.core.paths.integrationsDir,
       capability,
-      stats: this.core.graph.stats()
+      stats: this.core.graph.stats(),
+      engine: capabilitiesFor({
+        providerId: this.core.settings.engine.providerId,
+        model
+      })
     })
 
-    const proc = new ClaudeProcess(
+    /*
+     * Whichever engine the user chose.
+     *
+     * The factory returns the same `ClaudeProcess` this line used to construct when the setting
+     * says so, which is why nothing below here changed: the manager's 1000 lines of message
+     * assembly, tool blocks, usage metering and generated UI consume one event union and have
+     * never known who produced it.
+     */
+    const proc = createEngine(
       {
-        binary: this.binary!,
+        settings: this.core.settings,
+        secret: (ref) => this.secretReader?.(ref),
+        model
+      },
+      {
         cwd: this.core.paths.root,
         model,
         capability,
         appendSystemPrompt: systemPrompt,
         mcpConfig: this.buildMcpConfig(sessionId),
-        resumeSessionId: session?.claudeSessionId ?? null,
+        // Only when it belongs to this engine. A Codex thread id handed to Claude as something
+        // to resume fails inside a turn the user is waiting on, and switching engine mid-chat
+        // is exactly when that would happen.
+        resumeSessionId: this.core.chat.resumableFor(
+          sessionId,
+          this.core.settings.engine.providerId
+        ),
         // Never let one turn exceed either the per-turn cap or what is left of
         // today's allowance, whichever is smaller.
         maxBudgetUsd: this.perTurnCeiling(),
         // A scheduled run is unattended, which widens what it may not do.
         unattended,
-        effort
+        effort,
+        // Where an API engine finds the brain tools. The CLI engines reach the same host
+        // through the MCP bridge instead, and ignore this.
+        toolEndpoint: this.toolHost.url
+          ? { url: this.toolHost.url, token: this.toolHost.token }
+          : null,
+        // Replayed for an engine with nothing to resume, which is what lets a conversation
+        // survive a change of engine: the history is the app's, not the provider's.
+        history: this.historyFor(sessionId)
       },
       // `proc` is referenced before the constructor returns, but only from the
       // callback, which cannot fire until the child has spawned.
@@ -621,7 +766,7 @@ export class AgentManager {
     })
   }
 
-  private onEvent(sessionId: string, event: ClaudeStreamEvent, proc: ClaudeProcess): void {
+  private onEvent(sessionId: string, event: ClaudeStreamEvent, proc: AgentEngine): void {
     const runtime = this.runtimes.get(sessionId)
     if (!runtime) return
     // A process that has been replaced still has events in flight. They belong to
@@ -633,7 +778,11 @@ export class AgentManager {
     switch (event.type) {
       case 'init': {
         if (event.claudeSessionId) {
-          this.core.chat.setClaudeSessionId(sessionId, event.claudeSessionId)
+          this.core.chat.setEngineSession(
+            sessionId,
+            event.claudeSessionId,
+            this.core.settings.engine.providerId
+          )
         }
         this.emit({
           type: 'session',
@@ -809,6 +958,23 @@ export class AgentManager {
             sessionId,
             message:
               'The turn was stopped by the per-turn spend ceiling. Raise it in Settings if the task genuinely needs more steps.'
+          })
+        }
+
+        /*
+         * A turn that failed has to say so.
+         *
+         * The Claude CLI writes an assistant message before almost any failure, so the error was
+         * always visible as text in the transcript. An API engine that is refused at the first
+         * request writes nothing at all — which left the user's own message on screen, the
+         * composer apparently still working, and the reason for it only in the log. The state
+         * did go idle; there was simply nothing to see.
+         */
+        if (event.isError && !runtime.lastAssistantMessageId) {
+          this.emit({
+            type: 'error',
+            sessionId,
+            message: event.text?.trim() || 'The turn failed before the model answered.'
           })
         }
 

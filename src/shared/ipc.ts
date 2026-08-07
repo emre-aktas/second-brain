@@ -28,6 +28,7 @@ import type {
   WhatsNew,
   WorkspaceInfo
 } from './types'
+import type { EngineState, ModelInfo } from './engines'
 import type { GenUiSpec } from './genui'
 
 /**
@@ -237,6 +238,39 @@ export interface ApiMap {
    * bring the dialog back.
    */
   'update:whatsNew': (payload: void) => WhatsNew | null
+
+  /* the model engine */
+  /**
+   * Which engines exist, which are ready, and what the current one can do.
+   *
+   * One read for the whole tab. The alternative — a channel per question — is how the panel and
+   * the agent came to disagree about integrations, and the same shape of bug is available here.
+   */
+  'engine:state': (payload: void) => EngineState
+  /**
+   * A provider's model catalogue, fetched from the provider.
+   *
+   * Never a list this app maintains: every provider's line moves on its own schedule, and a
+   * hardcoded model id fails at the first turn rather than at startup.
+   */
+  'engine:models': (payload: { providerId: string; force?: boolean }) => {
+    models: ModelInfo[]
+    error: string | null
+  }
+  'engine:select': (payload: {
+    providerId: string
+    model?: string
+    baseUrl?: string
+    effort?: string
+  }) => EngineState
+  /** The key goes to the vault, never to settings.json. */
+  'engine:setKey': (payload: { providerId: string; key: string }) => EngineState
+  'engine:clearKey': (payload: { providerId: string }) => EngineState
+  /** One live request, so "it works" is something the user is shown rather than told. */
+  'engine:test': (payload: { providerId: string; model?: string }) => {
+    ok: boolean
+    message: string
+  }
 
   /* graph and notes */
   'graph:get': (payload: void) => GraphSnapshot
@@ -492,6 +526,12 @@ export const API_CHANNELS: ApiChannel[] = [
   'update:install',
   'update:openRelease',
   'update:whatsNew',
+  'engine:state',
+  'engine:models',
+  'engine:select',
+  'engine:setKey',
+  'engine:clearKey',
+  'engine:test',
   'graph:get',
   'graph:stats',
   'graph:savePositions',

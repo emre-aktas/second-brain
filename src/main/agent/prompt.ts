@@ -1,4 +1,5 @@
 import type { AgentCapability, GraphStats } from '@shared/types'
+import type { EngineCapabilities } from '@shared/engines'
 
 /**
  * Compact reference for the Generated UI schema.
@@ -77,6 +78,15 @@ export interface PromptContext {
   stats: GraphStats
   /** Where the user currently is in the app, when relevant. */
   openNote?: { id: string; title: string } | null
+  /**
+   * What the engine running this turn can actually do.
+   *
+   * Told to the agent, not only to the user. An agent that does not know it has no shell keeps
+   * offering to run commands; one that does not know its connectors are absent keeps promising
+   * to check the user's mail. Both read as the app being broken rather than as the engine being
+   * different, and the fix is a paragraph rather than a feature.
+   */
+  engine?: EngineCapabilities | null
 }
 
 export function buildSystemPrompt(ctx: PromptContext): string {
@@ -626,6 +636,49 @@ references like "this" or "here" mean that note.`)
 Be concrete and brief. Lead with the answer. Skip preambles like "Great
 question" and closing offers of further help. No emoji. When you are uncertain,
 say so in a clause, not a paragraph.`)
+
+  /*
+   * What this engine cannot do, stated plainly.
+   *
+   * Only the absences: a list of what *is* available is already the rest of this prompt, and
+   * repeating it would cost tokens on every turn to say nothing new.
+   */
+  if (ctx.engine) {
+    const limits: string[] = []
+    if (!ctx.engine.builtInTools) {
+      limits.push(
+        '- You have NO shell and NO general file access. Everything you do goes through the ' +
+          'mcp__brain__* tools. Do not offer to run commands or edit files outside the vault.'
+      )
+    }
+    if (!ctx.engine.accountConnectors) {
+      limits.push(
+        "- The user's own MCP connectors (Gmail, Slack, Calendar and so on) are NOT available " +
+          'on this engine. Only integrations registered inside this app are. Check ' +
+          'list_integrations before promising anything outside the vault.'
+      )
+    }
+    if (!ctx.engine.serverSideSessions) {
+      limits.push(
+        '- This conversation is replayed to the provider on every turn and only the recent part ' +
+          'of it survives. Write anything worth keeping into a note rather than relying on ' +
+          'having said it earlier.'
+      )
+    }
+    if (ctx.engine.metered) {
+      limits.push(
+        "- This engine bills the user's own account per token. Be efficient: prefer one good " +
+          'search over several speculative ones.'
+      )
+    }
+
+    if (limits.length > 0) {
+      sections.push(
+        `# This engine (${ctx.engine.providerId}, ${ctx.engine.model})\n\n` +
+          `Constraints that apply to you right now:\n\n${limits.join('\n')}`
+      )
+    }
+  }
 
   return sections.join('\n\n')
 }

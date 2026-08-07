@@ -448,6 +448,22 @@ const MIGRATIONS: Migration[] = [
       );
       CREATE INDEX idx_integration_audit_ts ON integration_audit(integration_id, ts DESC);
     `
+  },
+  {
+    version: 18,
+    name: 'session-engine',
+    up: `
+      -- Which engine's conversation \`claude_session_id\` holds.
+      --
+      -- The column now stores whatever the selected engine calls a session — a Claude session
+      -- id, a Codex thread id, or nothing at all for a provider that keeps no state. Without
+      -- knowing which, switching engine mid-chat would hand a Claude id to Codex as something
+      -- to resume, and the failure would arrive inside a turn the user was waiting on.
+      --
+      -- Backfilled to 'claude-cli' because that is the only engine that existed until now.
+      ALTER TABLE sessions ADD COLUMN engine TEXT;
+      UPDATE sessions SET engine = 'claude-cli' WHERE claude_session_id IS NOT NULL;
+    `
   }
 ]
 

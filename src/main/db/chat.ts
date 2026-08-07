@@ -97,6 +97,33 @@ export class ChatStore {
     return this.listSessions(1)[0] ?? this.createSession()
   }
 
+  /**
+   * Remember the provider's own id for this conversation, and whose it is.
+   *
+   * The engine is stored alongside because the id is meaningless without it: a Codex thread id
+   * handed to Claude as something to resume fails inside a turn the user is waiting on, and
+   * nothing about the string itself says which engine minted it.
+   */
+  setEngineSession(id: string, engineSessionId: string, engine: string): void {
+    this.db.run('UPDATE sessions SET claude_session_id = ?, engine = ?, updated_at = ? WHERE id = ?', [
+      engineSessionId,
+      engine,
+      Date.now(),
+      id
+    ])
+  }
+
+  /** The stored id, but only when it belongs to the engine asking for it. */
+  resumableFor(id: string, engine: string): string | null {
+    const row = this.db.get<{ claude_session_id: string | null; engine: string | null }>(
+      'SELECT claude_session_id, engine FROM sessions WHERE id = ?',
+      [id]
+    )
+    if (!row?.claude_session_id) return null
+    // A null engine is a row written before this column existed, which can only be Claude's.
+    return (row.engine ?? 'claude-cli') === engine ? row.claude_session_id : null
+  }
+
   setClaudeSessionId(id: string, claudeSessionId: string): void {
     this.db.run('UPDATE sessions SET claude_session_id = ?, updated_at = ? WHERE id = ?', [
       claudeSessionId,

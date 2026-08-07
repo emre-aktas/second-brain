@@ -280,6 +280,11 @@ async function bootstrap(): Promise<void> {
    * process that installs an update is not the process that reports it, so the notes have to
    * be handed over through storage.
    */
+  // Engine API keys live in the same vault as integration credentials, so the redactor already
+  // covers them. Injected rather than imported: reaching from the agent into the registry would
+  // be a require cycle in the CJS main bundle.
+  agent.secretReader = (ref) => integrations?.secrets.get(ref)
+
   updater = new UpdateController({
     engine: autoUpdater,
     kv: core.kv,

@@ -31,6 +31,16 @@ export const api = {
   reportUserActivity: () => call('app:userActivity'),
   openExternal: (url: string) => call('app:openExternal', { url }),
 
+  /* the model engine */
+  engineState: () => call('engine:state'),
+  engineModels: (providerId: string, force?: boolean) =>
+    call('engine:models', { providerId, force }),
+  selectEngine: (providerId: string, model?: string, baseUrl?: string, effort?: string) =>
+    call('engine:select', { providerId, model, baseUrl }),
+  setEngineKey: (providerId: string, key: string) => call('engine:setKey', { providerId, key }),
+  clearEngineKey: (providerId: string) => call('engine:clearKey', { providerId }),
+  testEngine: (providerId: string, model?: string) => call('engine:test', { providerId, model }),
+
   /* updates */
   updateStatus: () => call('update:status'),
   checkForUpdate: () => call('update:check'),
