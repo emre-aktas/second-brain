@@ -8,6 +8,17 @@ load-bearing — `notesFromChangelog` in `src/main/updater.ts` finds a release b
 Keep them as `## <version>` with the newest first. `npm run release` writes the skeleton for a
 new one from the commits since the last release; edit it before pushing.
 
+## 0.4.0
+
+*2026-08-08*
+
+- Give the Engine tab steps that fit, and a check that means something
+- Keep a tool's model and thinking level per engine
+- Make Codex and the API engines actually reach the vault
+- Store a chosen model for a provider that has none yet
+- Stop sending Claude's model name to every other engine
+- Annotate the release tag, or the release never happens
+
 ## 0.3.0
 
 *2026-08-06*
