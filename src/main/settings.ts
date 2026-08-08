@@ -113,7 +113,24 @@ export function defaultSettings(workspacePath: string): Settings {
  * because a `Settings` whose `layout` is the string "wide" satisfies no reader in the app —
  * the type says it is an object and every call site believes it.
  */
-function merge<T>(base: T, patch: unknown): T {
+/**
+ * Settings that are dictionaries rather than groups, by path.
+ *
+ * `merge` drops keys the defaults do not declare, which is right for every fixed-shape group in
+ * `Settings` and exactly wrong for these three: they are keyed by *provider id*, they all start
+ * `{}`, and so every key in them is by definition one the defaults never declared. The result was
+ * that a chosen model was silently discarded for every provider — the log line said it had been
+ * saved, because it was printed from the patch, and the panel then showed "none chosen". Two
+ * separate reports, one line of code.
+ *
+ * A list rather than a heuristic. "The base group is empty, so accept anything" would also accept
+ * junk into a group that merely happens to have no defaults yet, and the whole point of the rule
+ * is that a settings file can be hand-edited or left behind by a build that structured something
+ * differently.
+ */
+const OPEN_MAPS = new Set(['engine.models', 'engine.baseUrls', 'engine.efforts'])
+
+function merge<T>(base: T, patch: unknown, path = ''): T {
   const baseIsGroup = base !== null && typeof base === 'object' && !Array.isArray(base)
 
   if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
@@ -126,10 +143,17 @@ function merge<T>(base: T, patch: unknown): T {
     return base === undefined ? (patch as T) : base
   }
 
+  const open = OPEN_MAPS.has(path)
   const out = { ...(base as Record<string, unknown>) }
   for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
-    if (!(key in out)) continue // ignore unknown keys rather than trusting them
-    out[key] = merge(out[key], value)
+    // Unknown keys are ignored rather than trusted — except in a dictionary, where every key is
+    // unknown by construction and the values are strings whatever the key.
+    if (!(key in out)) {
+      if (!open || typeof value !== 'string') continue
+      out[key] = value
+      continue
+    }
+    out[key] = merge(out[key], value, path ? `${path}.${key}` : key)
   }
   return out as T
 }

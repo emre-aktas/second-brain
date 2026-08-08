@@ -120,5 +120,60 @@ check(
   defaults.layout.panelWidth
 )
 
+/*
+ * The engine dictionaries, which are the one place "ignore unknown keys" was wrong.
+ *
+ * `engine.models`, `engine.baseUrls` and `engine.efforts` are keyed by provider id and all start
+ * `{}`, so *every* key in them is one the defaults never declared — and the rule that protects
+ * every other group from a malformed file was silently discarding all three. A chosen model was
+ * never stored for any provider, on the very first choice, while the log line said it had been:
+ * the log printed the patch, not the result. It surfaced as two unrelated-looking reports, one
+ * for Codex and one for DeepSeek.
+ */
+const dict = join(root, 'dict.json')
+const dictStore = new SettingsStore(dict, join(root, 'vault'))
+
+dictStore.update({ engine: { models: { 'codex-cli': 'gpt-5.6-sol' } } })
+check(
+  'a model is stored for a provider that had none',
+  dictStore.get().engine.models['codex-cli'],
+  'gpt-5.6-sol'
+)
+
+dictStore.update({ engine: { models: { deepseek: 'deepseek-chat' } } })
+check('and adding a second leaves the first', dictStore.get().engine.models['codex-cli'], 'gpt-5.6-sol')
+check('with the second stored too', dictStore.get().engine.models['deepseek'], 'deepseek-chat')
+
+dictStore.update({ engine: { efforts: { deepseek: 'high' }, baseUrls: { custom: 'http://x/v1' } } })
+check('an effort is stored', dictStore.get().engine.efforts['deepseek'], 'high')
+check('and a base URL', dictStore.get().engine.baseUrls['custom'], 'http://x/v1')
+
+// It survives a reload, which is the half a purely in-memory check would miss.
+check(
+  'and all of it survives being read back',
+  new SettingsStore(dict, join(root, 'vault')).get().engine.models['codex-cli'],
+  'gpt-5.6-sol'
+)
+
+// Being an open dictionary does not make it a free-for-all: the values are strings, and a group
+// smuggled in as a model name would be handed to a provider as one.
+dictStore.update({ engine: { models: { bad: { nested: true } } as unknown as Record<string, string> } })
+check(
+  'a non-string value is still refused',
+  dictStore.get().engine.models['bad'] === undefined ? 'refused' : 'accepted',
+  'refused'
+)
+
+// And the fixed-shape groups are unchanged by any of it — the protection is still on.
+const stillTyped = new SettingsStore(dict, join(root, 'vault'))
+stillTyped.update({ layout: { madeUp: 1 } as unknown as Settings['layout'] })
+check(
+  'an unknown key in a real group is still ignored',
+  (stillTyped.get().layout as unknown as Record<string, unknown>)['madeUp'] === undefined
+    ? 'ignored'
+    : 'accepted',
+  'ignored'
+)
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`)
 process.exit(failures === 0 ? 0 : 1)
