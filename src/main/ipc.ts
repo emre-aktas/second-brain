@@ -30,7 +30,8 @@ import {
   modelsFor,
   resolveCodexBinary
 } from './agent/engines/factory'
-import { forgetModels } from './agent/engines/catalogue'
+import { cachedModel, forgetModels } from './agent/engines/catalogue'
+import { verifyEngine } from './agent/engines/verify'
 
 const log = createLogger('ipc')
 
@@ -232,6 +233,52 @@ export function registerIpc(ctx: IpcContext): void {
       blocked: readiness.ok ? null : readiness.reason,
       notes: capabilityNotes(capabilities)
     }
+  }
+
+  /**
+   * A provider's settings, and optionally the decision to run on it.
+   *
+   * One function for both because they write the same three fields; the flag is the difference,
+   * and it used to be missing. Storing a base URL went through select, so typing an endpoint
+   * during setup switched the running agent to a provider that had no credential yet — a
+   * conversation could be answered by a half-configured engine because of a keystroke in a
+   * different field. Setup configures as it goes and selects once, at the end.
+   *
+   * Either way this touches nothing but the engine: the vault, the chat history, the saved tools
+   * and the schedule are the app's, not the provider's. A conversation started on one engine
+   * carries on with another because the history is replayed from our own store.
+   */
+  const writeEngine = (
+    providerId: string,
+    values: { model?: string; baseUrl?: string; effort?: string },
+    activate: boolean
+  ): EngineState => {
+    const provider = providerById(providerId)
+    if (!provider) throw new Error(`unknown engine "${providerId}"`)
+
+    const patch: Parameters<typeof core.updateSettings>[0] = {
+      engine: activate ? { providerId } : {}
+    }
+    if (values.model !== undefined) {
+      patch.engine!.models = { ...core.settings.engine.models, [providerId]: values.model }
+    }
+    if (values.effort !== undefined) {
+      patch.engine!.efforts = { ...core.settings.engine.efforts, [providerId]: values.effort }
+    }
+    if (values.baseUrl !== undefined) {
+      patch.engine!.baseUrls = { ...core.settings.engine.baseUrls, [providerId]: values.baseUrl }
+      // A different endpoint is a different catalogue. Forgotten against the *old* URL, since
+      // that is the key the cache is under until the patch lands.
+      forgetModels(baseUrlFor(core.settings, providerId))
+    }
+
+    core.updateSettings(patch)
+    log.info(
+      activate
+        ? `engine is now ${providerId}${values.model ? ` (${values.model})` : ''}`
+        : `configured ${providerId}${values.model ? ` (${values.model})` : ''}`
+    )
+    return engineState()
   }
 
   /**
@@ -502,8 +549,7 @@ export function registerIpc(ctx: IpcContext): void {
         sessionId,
         capability: 'curate',
         context,
-        ...(tool.model ? { model: tool.model } : {}),
-        ...(tool.effort ? { effort: tool.effort } : {})
+        enginePrefs: tool.enginePrefs
       })
       return { sessionId }
     },
@@ -557,16 +603,16 @@ export function registerIpc(ctx: IpcContext): void {
       // Logged because this is the path that used to fail silently in a tool
       // window: the run started, and nothing ever came back to the window.
       log.info(
-        `tool run "${tool.name}" · ${action.label} → session ${sessionId.slice(-6)}, model ${tool.model ?? core.settings.model}, effort ${tool.effort ?? core.settings.effort}, from window ${senderId}`
+        `tool run "${tool.name}" · ${action.label} → session ${sessionId.slice(-6)}, engine ${core.settings.engine.providerId}, prefs ${JSON.stringify(tool.enginePrefs[core.settings.engine.providerId] ?? {})}, from window ${senderId}`
       )
       await agent.send(prompt, {
         sessionId,
         capability: 'curate',
         context,
-        // A tool can be pinned to a faster model or a bigger thinking budget than
-        // the app's, because a button press and a weekly review are not the same job.
-        ...(tool.model ? { model: tool.model } : {}),
-        ...(tool.effort ? { effort: tool.effort } : {}),
+        // A tool can be pinned to a faster model or a bigger thinking budget than the app's,
+        // because a button press and a weekly review are not the same job. Carried as the whole
+        // per-engine map: which entry applies is the manager's question, not this call site's.
+        enginePrefs: tool.enginePrefs,
         toolAction: {
           toolId: id,
           actionId,
@@ -659,37 +705,11 @@ export function registerIpc(ctx: IpcContext): void {
     'engine:models': ({ providerId, force }) =>
       modelsFor(core.settings, providerId, (ref) => integrations.secrets.get(ref), force === true),
 
-    'engine:select': ({ providerId, model, baseUrl, effort }) => {
-      const provider = providerById(providerId)
-      if (!provider) throw new Error(`unknown engine "${providerId}"`)
+    'engine:select': ({ providerId, model, baseUrl, effort }) =>
+      writeEngine(providerId, { model, baseUrl, effort }, true),
 
-      /*
-       * Only the engine changes.
-       *
-       * The vault, the chat history, the saved tools and the schedule are untouched by this —
-       * they are the app's, not the provider's. A conversation started on one engine continues
-       * on another because the history is replayed from our own store rather than resumed from
-       * theirs, and a tool or a task keeps the model and effort it was saved with.
-       */
-      const patch: Parameters<typeof core.updateSettings>[0] = {
-        engine: { providerId }
-      }
-      if (model !== undefined) {
-        patch.engine!.models = { ...core.settings.engine.models, [providerId]: model }
-      }
-      if (effort !== undefined) {
-        patch.engine!.efforts = { ...core.settings.engine.efforts, [providerId]: effort }
-      }
-      if (baseUrl !== undefined) {
-        patch.engine!.baseUrls = { ...core.settings.engine.baseUrls, [providerId]: baseUrl }
-        // A different endpoint is a different catalogue.
-        forgetModels(baseUrlFor(core.settings, providerId))
-      }
-
-      core.updateSettings(patch)
-      log.info(`engine is now ${providerId}${model ? ` (${model})` : ''}`)
-      return engineState()
-    },
+    'engine:configure': ({ providerId, model, baseUrl, effort }) =>
+      writeEngine(providerId, { model, baseUrl, effort }, false),
 
     'engine:setKey': ({ providerId, key }) => {
       const provider = providerById(providerId)
@@ -710,6 +730,31 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'engine:test': async ({ providerId, model }) => engineTest(providerId, model),
+
+    'engine:verify': async ({ providerId, model }) => {
+      const provider = providerById(providerId)
+      const chosen = model ?? modelFor(core.settings, providerId)
+      const baseUrl = baseUrlFor(core.settings, providerId)
+
+      /*
+       * Whether to offer the check a tool, taken from the catalogue rather than assumed.
+       *
+       * A model the provider has said cannot take tools would fail this check on a requirement it
+       * was never going to meet, and the failure would read as the setup being wrong rather than
+       * as the model being limited — which the picker already says on its own row.
+       */
+      const info = chosen ? cachedModel(baseUrl, chosen) : null
+
+      return verifyEngine({
+        providerId,
+        model: chosen,
+        baseUrl,
+        apiKey: provider?.secretRef ? (integrations.secrets.get(provider.secretRef) ?? null) : null,
+        supportsTools: info ? info.supportsTools : true,
+        claudeBinary: resolveClaudeBinary(),
+        codexBinary: resolveCodexBinary()
+      })
+    },
 
     /* -------------------------------------------------------- graph, notes */
 
@@ -846,7 +891,9 @@ export function registerIpc(ctx: IpcContext): void {
     // No need to restart anything: the next turn asks for these, and the agent
     // respawns the tool's process when they differ from what it was spawned with.
     'tools:setModelPrefs': ({ id, model, effort }) => {
-      core.tools.setModelPrefs(id, { model, effort })
+      // Against the engine that is running, because that is the one whose picker the user just
+      // used. A model name means nothing outside the provider it came from.
+      core.tools.setModelPrefs(id, core.settings.engine.providerId, { model, effort })
       core.broadcast('tools:changed')
       return core.tools.get(id) ?? null
     },

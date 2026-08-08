@@ -117,6 +117,17 @@ const CODEX_MODELS = [
   }
 ]
 
+/** One model, so the setup flow can be walked all the way to its last step. */
+const GENERIC_MODEL = {
+  id: 'llama-3.3-70b',
+  label: 'Llama 3.3 70B',
+  contextLength: 131072,
+  promptPrice: 0,
+  completionPrice: 0,
+  supportsTools: true,
+  supportsReasoning: false
+}
+
 const SETTINGS = {
   workspacePath: '',
   engine: { providerId: 'claude-cli', models: {}, baseUrls: {} },
@@ -152,6 +163,29 @@ const SETTINGS = {
     sweep: { enabled: false, everyHours: 4, slack: true, grain: true, clickup: true }
   },
   appearance: { theme: 'dark', accent: 'violet', reduceMotion: false }
+}
+
+/**
+ * DeepSeek selected, with a key stored and no model — the reported dead end.
+ *
+ * The tab said "Choose a model for DeepSeek first" and offered nowhere to choose one: an API
+ * provider got a label where Codex got a settings card and the Claude CLI got its own panel, so
+ * the key, the address and the model were all unreachable once setup had been left. The only
+ * route back was to guess that Change → the provider you are already on reopens the wizard.
+ */
+function blockedApiState(): EngineState {
+  const base = stateFor('deepseek')
+  return {
+    ...base,
+    providers: base.providers.map((entry) =>
+      entry.provider.id === 'deepseek'
+        ? { ...entry, model: '', configured: true, selected: true }
+        : { ...entry, selected: false }
+    ),
+    selectedProviderId: 'deepseek',
+    capabilities: capabilitiesFor({ providerId: 'deepseek', model: '' }),
+    blocked: 'Choose a model for DeepSeek first.'
+  }
 }
 
 /** Codex selected, with a model chosen — the state in which the levels can be shown. */
@@ -207,7 +241,23 @@ async function main(): Promise<void> {
     ['update:whatsNew', null],
     ['app:settings:get', SETTINGS],
     ['engine:state', stateFor('claude-cli')],
-    ['engine:models', { models: [], error: null }]
+    ['engine:models', { models: [GENERIC_MODEL], error: null }],
+    // Storing a setting must not switch the engine, so setup can configure as it goes and select
+    // once at the end. Answered with the same state, which is what the panel does with it.
+    ['engine:configure', stateFor('claude-cli')],
+    // The end-to-end check, failing — because a failing check is the state worth drawing: it has
+    // to report what it managed and still let the user go ahead.
+    [
+      'engine:verify',
+      {
+        ok: false,
+        message: 'Could not reach http://127.0.0.1:11434/v1. fetch failed. Is Ollama running?',
+        reached: false,
+        answered: false,
+        calledTool: false,
+        tokens: null
+      }
+    ]
   ] as const) {
     ipcMain.removeHandler(channel)
     ipcMain.handle(channel, () => value)
@@ -359,7 +409,15 @@ async function main(): Promise<void> {
 
     const step = (await win.webContents.executeJavaScript(MEASURE)) as Shot
     const text = step.text ?? ''
-    check('the setup starts at step 1', /Step 1 of 2/i.test(text), text.slice(0, 300))
+    /*
+     * The numbering comes off the plan now, not off a literal.
+     *
+     * It used to be written into each card — "Step 1 of 2", "Step 2 of 2" — against a flow that
+     * already skipped a step when a key was stored, so a returning user opened on "step 2 of 2"
+     * with no step 1 in existence. OpenRouter's plan is key, model, check: three.
+     */
+    check('the setup starts at step 1', /step 1 of 3/i.test(text), text.slice(0, 300))
+    check('and says which provider it is setting up', /OpenRouter · step/i.test(text), text.slice(0, 300))
     check('asking for the key', /Connect OpenRouter/i.test(text), text.slice(0, 300))
     check('now there is a masked field', (step.inputs ?? []).includes('password'), step.inputs)
     check(
@@ -379,6 +437,210 @@ async function main(): Promise<void> {
       (await win.webContents.capturePage()).toPNG()
     )
     log(`  wrote ${join(OUT, 'engine-setup.png')}`)
+  }
+
+  /* ------------------------------------------------------- a plan of a different length */
+
+  log('\na provider whose setup is a different shape')
+  {
+    /*
+     * A local server has no key and no address anyone can guess, so its plan is endpoint, model,
+     * check — a different first step and a different length from OpenRouter's. Hardcoded
+     * numbering could not have described both, which is the bug this replaced.
+     */
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const back = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Back')
+        back?.click()
+        return true
+      })()`
+    )
+    await settle(300)
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const change = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Change')
+        change?.click()
+        return true
+      })()`
+    )
+    await settle(400)
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.startsWith('Ollama')
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(600)
+
+    const local = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const text = local.text ?? ''
+    check('a keyless provider is not asked for a key', !(local.inputs ?? []).includes('password'), local.inputs)
+    check('it starts on the address instead', /Point at the endpoint/i.test(text), text.slice(0, 300))
+    check('and its plan has its own length', /step 1 of 3/i.test(text), text.slice(0, 300))
+    // "Installed" is meaningless for a server that has to be started; the empty model list you
+    // get otherwise explains nothing on its own.
+    check('it says the server has to be running', /has to be running/i.test(text), text.slice(0, 500))
+
+    // And the last step is the one the flow never had: does it actually hold a turn.
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const go = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Continue')
+        go?.click()
+        return true
+      })()`
+    )
+    await settle(700)
+    const model = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    check('then the model', /step 2 of 3/i.test(model.text ?? ''), (model.text ?? '').slice(0, 300))
+
+    /* ------------------------------------------------------------- the last step */
+
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.includes('Llama 3.3 70B')
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(700)
+
+    const verify = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const verifyText = verify.text ?? ''
+    /*
+     * The step the flow never had.
+     *
+     * Everything before it is a necessary condition that a broken setup can satisfy: a key with
+     * no completions quota lists models, a model that ignores tools looks identical in the
+     * picker, and a Codex install whose session expired publishes its catalogue from disk. The
+     * flow used to end at "a model was chosen" and leave the real answer to the user's first
+     * question.
+     */
+    check('the flow ends on a real check', /step 3 of 3/i.test(verifyText), verifyText.slice(0, 400))
+    check('which says what it will do first', /Sends one short message/i.test(verifyText), verifyText.slice(0, 500))
+    check(
+      'and does not run on arrival',
+      (verify.buttons ?? []).some((b) => /Run the check/i.test(b)),
+      verify.buttons
+    )
+
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.trim() === 'Run the check'
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(800)
+
+    const checked = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const checkedText = checked.text ?? ''
+    // Three lights rather than one verdict: "answers but will not call a tool" is the common
+    // middle outcome and it decides whether the agent can touch a single note.
+    check('a failure reports how far it got', /Reached Ollama/i.test(checkedText), checkedText.slice(0, 600))
+    check('and names the tool question separately', /can use your notes/i.test(checkedText), checkedText.slice(0, 600))
+    check('the reason is shown', /Is Ollama running/i.test(checkedText), checkedText.slice(0, 700))
+    // The check is advice, not a gate. A provider having a bad minute must not be able to trap
+    // someone in a setup screen.
+    check(
+      'and it still lets you go ahead',
+      (checked.buttons ?? []).some((b) => /Use Ollama/i.test(b)),
+      checked.buttons
+    )
+
+    writeFileSync(join(OUT, 'engine-verify.png'), (await win.webContents.capturePage()).toPNG())
+    log(`  wrote ${join(OUT, 'engine-verify.png')}`)
+  }
+
+  /* --------------------------------------------- an engine that cannot run yet */
+
+  log('\na selected engine that is not finished')
+
+  ipcMain.removeHandler('engine:state')
+  ipcMain.handle('engine:state', () => blockedApiState())
+
+  // Left and returned to, which is what unmounts the panel and drops any wizard step it was
+  // on. The Settings fallback matters: without it the rail click can miss and the panel stays
+  // exactly where the previous section left it, which reads as every assertion below failing.
+  await win.webContents.executeJavaScript(
+    `document.querySelector('button[aria-label="Graph"]')?.click()
+     || document.querySelector('button[aria-label="Settings"]')?.click(), true`
+  )
+  await settle(400)
+  await win.webContents.executeJavaScript(
+    `document.querySelector('button[aria-label="Engine"]')?.click(), true`
+  )
+  await settle(900)
+
+  {
+    const blocked = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const text = blocked.text ?? ''
+    check('it still says what is wrong', /Choose a model for DeepSeek/i.test(text), text.slice(0, 400))
+    /*
+     * And now offers to fix it. This is the whole report: the message named the missing thing
+     * and nothing on the screen could supply it.
+     */
+    check(
+      'and offers a way to fix it',
+      (blocked.buttons ?? []).some((b) => /Choose a model/i.test(b)),
+      blocked.buttons
+    )
+    // The settings an API provider has, which previously appeared nowhere at all.
+    check('the key is shown as stored', /API key\s*stored/i.test(text), text.slice(0, 600))
+    check('the address is shown', /api\.deepseek\.com/i.test(text), text.slice(0, 600))
+    check(
+      'and the key can be replaced or removed without the wizard',
+      (blocked.buttons ?? []).some((b) => /Replace/i.test(b)) &&
+        (blocked.buttons ?? []).some((b) => /Remove/i.test(b)),
+      blocked.buttons
+    )
+
+    /*
+     * Thinking, which no API provider had a control for anywhere.
+     *
+     * `settings.engine.efforts` has existed all along, `effortFor` reads it on every turn and
+     * `reasoningPatch` knows four wire dialects for it — and nothing offered to set it, so every
+     * API engine ran at whatever the provider does when it is not told. Codex got a picker
+     * because its levels are published per model; the providers whose levels are the app's own
+     * five got nothing, which is the wrong way round.
+     */
+    check('there is a thinking control', /Thinking/i.test(text), text.slice(0, 800))
+    for (const tier of ['low', 'high', 'max']) {
+      check(`the ${tier} tier is offered`, (blocked.buttons ?? []).includes(tier), blocked.buttons)
+    }
+    check(
+      'and letting the provider decide stays a choice',
+      (blocked.buttons ?? []).some((b) => /provider default/i.test(b)),
+      blocked.buttons
+    )
+
+    writeFileSync(join(OUT, 'engine-blocked.png'), (await win.webContents.capturePage()).toPNG())
+    log(`  wrote ${join(OUT, 'engine-blocked.png')}`)
+
+    // Pressing it must land on the step that clears the block, not at the top of the wizard.
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.trim() === 'Choose a model'
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(700)
+    const landed = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    check(
+      'the fix lands on the step that clears it',
+      /Choose a model/i.test(landed.text ?? '') && /DeepSeek · step/i.test(landed.text ?? ''),
+      (landed.text ?? '').slice(0, 300)
+    )
+
   }
 
   /* -------------------------------------------------------------- codex */
@@ -427,10 +689,22 @@ async function main(): Promise<void> {
     !/\bxhigh\b/.test(codexText),
     codexText.slice(0, 600)
   )
+  /*
+   * And it says the sandbox is gone, because it is.
+   *
+   * The card used to promise "Codex runs in its own sandbox … and nothing outside it". That
+   * stopped being true the moment the engine had to be launched with the flag that makes tool
+   * calls work at all, and a stale reassurance is worse than none.
+   */
   check(
-    'the sandbox is explained',
-    /sandbox/i.test(codexText),
-    codexText.slice(0, 600)
+    'the sandbox situation is stated, not promised away',
+    /not sandboxed/i.test(codexText),
+    codexText.slice(0, 900)
+  )
+  check(
+    'and the reason is given rather than left as a scare',
+    /cancels every tool call/i.test(codexText),
+    codexText.slice(0, 900)
   )
 
   await new Promise<void>((resolve) => {

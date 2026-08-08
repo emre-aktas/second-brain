@@ -256,8 +256,32 @@ export interface ApiMap {
   'engine:models': (payload: { providerId: string; force?: boolean }) => {
     models: ModelInfo[]
     error: string | null
+    /**
+     * What the provider's *own* configuration is set to, when it has one we can read.
+     *
+     * Codex only. Leaving the model unset in this app is a real choice — it means "use whatever
+     * Codex itself is set to" — but it left the thinking picker with nothing to show, because
+     * which levels exist is a property of the model. Resolving the config's model is what lets
+     * that choice still have a thinking level.
+     */
+    configured?: { model: string | null; effort: string | null }
   }
   'engine:select': (payload: {
+    providerId: string
+    model?: string
+    baseUrl?: string
+    effort?: string
+  }) => EngineState
+  /**
+   * Store a provider's settings *without* switching to it.
+   *
+   * Two different intentions were going through `engine:select`, and one of them had a side
+   * effect nobody asked for: typing a base URL during setup switched the running agent to a
+   * provider that had no key yet, mid-wizard, because storing the URL and selecting the provider
+   * were the same call. Setup now configures as it goes and selects once, at the end, after the
+   * engine has been shown to work.
+   */
+  'engine:configure': (payload: {
     providerId: string
     model?: string
     baseUrl?: string
@@ -270,6 +294,26 @@ export interface ApiMap {
   'engine:test': (payload: { providerId: string; model?: string }) => {
     ok: boolean
     message: string
+  }
+  /**
+   * One small turn, which is the only check that answers "will this work".
+   *
+   * `engine:test` reads the model list — authenticated, free, and silent about everything that
+   * matters: a key with no completions quota lists models, a model that cannot call tools lists
+   * fine, and a Codex install whose session has expired publishes its catalogue from disk. All
+   * three pass the test and fail the user's first real question. This one provokes a turn
+   * instead, so the failure lands in the setup flow where it can be acted on.
+   *
+   * Deliberately not automatic: on a metered provider it costs a fraction of a cent, and nothing
+   * in this app spends the user's money on its own initiative.
+   */
+  'engine:verify': (payload: { providerId: string; model?: string }) => {
+    ok: boolean
+    message: string
+    reached: boolean
+    answered: boolean
+    calledTool: boolean
+    tokens: number | null
   }
 
   /* graph and notes */
@@ -388,10 +432,18 @@ export interface ApiMap {
     alwaysOnTop?: boolean
   }) => SavedTool | null
   /** Model and thinking budget for this tool's turns. Null means the app's setting. */
+  /**
+   * A tool's model or thinking level, for the engine that is running.
+   *
+   * `effort` is a plain string rather than `AgentEffort` because the ladder belongs to the
+   * engine: Codex publishes six levels for its flagship including `ultra`, which this app's
+   * union does not have and should not grow. Which provider it is filed under is decided in the
+   * main process, from the selected engine, rather than sent by the caller.
+   */
   'tools:setModelPrefs': (payload: {
     id: string
     model?: string | null
-    effort?: AgentEffort | null
+    effort?: string | null
   }) => SavedTool | null
   'tools:shortcutStates': (payload: void) => ToolShortcutStateDto[]
   /**
@@ -529,9 +581,11 @@ export const API_CHANNELS: ApiChannel[] = [
   'engine:state',
   'engine:models',
   'engine:select',
+  'engine:configure',
   'engine:setKey',
   'engine:clearKey',
   'engine:test',
+  'engine:verify',
   'graph:get',
   'graph:stats',
   'graph:savePositions',

@@ -35,11 +35,19 @@ export const api = {
   engineState: () => call('engine:state'),
   engineModels: (providerId: string, force?: boolean) =>
     call('engine:models', { providerId, force }),
+  // `effort` was declared here and never forwarded, which made the whole Codex thinking-level
+  // picker inert: every chip saved nothing and the refresh that followed put the old value back.
+  // Nothing failed to compile, and nothing in the panel could have revealed it.
   selectEngine: (providerId: string, model?: string, baseUrl?: string, effort?: string) =>
-    call('engine:select', { providerId, model, baseUrl }),
+    call('engine:select', { providerId, model, baseUrl, effort }),
+  // Stores a provider's settings without switching to it, which is what setup needs while the
+  // user is still deciding. `selectEngine` is the deliberate act at the end.
+  configureEngine: (providerId: string, model?: string, baseUrl?: string, effort?: string) =>
+    call('engine:configure', { providerId, model, baseUrl, effort }),
   setEngineKey: (providerId: string, key: string) => call('engine:setKey', { providerId, key }),
   clearEngineKey: (providerId: string) => call('engine:clearKey', { providerId }),
   testEngine: (providerId: string, model?: string) => call('engine:test', { providerId, model }),
+  verifyEngine: (providerId: string, model?: string) => call('engine:verify', { providerId, model }),
 
   /* updates */
   updateStatus: () => call('update:status'),

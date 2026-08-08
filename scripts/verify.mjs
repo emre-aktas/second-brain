@@ -67,6 +67,7 @@ const SUITE = [
   { file: 'src/main/scheduleTimeline.probe.ts', mode: 'gui' },
   { file: 'src/main/updateUi.probe.ts', mode: 'gui' },
   { file: 'src/main/integrationsUi.probe.ts', mode: 'gui' },
+  { file: 'src/main/toolPrefs.probe.ts', mode: 'gui' },
   { file: 'src/main/engineUi.probe.ts', mode: 'gui' },
 
   { file: 'src/main/agent/spawn.probe.ts', mode: 'cli' },

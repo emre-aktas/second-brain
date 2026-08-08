@@ -512,9 +512,20 @@ function Shell(): React.JSX.Element {
                 : `cap ${Math.round((budget.spentToday / Math.max(0.01, budget.dailyLimitUsd)) * 100)}%`}
             </span>
           )}
-          {agentAuth?.onSubscription && agentAuth.subscriptionType && (
-            <span className="capitalize">{agentAuth.subscriptionType} plan</span>
-          )}
+          {/*
+            The Claude subscription tier, shown only while Claude is answering.
+
+            `agentAuth` is read from the `claude` CLI whether or not that CLI is the engine, so
+            "Team plan" sat in the footer under a DeepSeek turn — naming an account that had
+            nothing to do with the answer or its cost. The usage windows beside it are already
+            gated on `usageWindows`, which is Claude-only for the same reason; this was the one
+            readout that was not.
+          */}
+          {engine?.capabilities?.usageWindows !== false &&
+            agentAuth?.onSubscription &&
+            agentAuth.subscriptionType && (
+              <span className="capitalize">{agentAuth.subscriptionType} plan</span>
+            )}
           {settings?.curator.enabled && <span>Curating in background</span>}
         </div>
       </footer>

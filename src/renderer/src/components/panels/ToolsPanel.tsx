@@ -15,7 +15,7 @@ import {
   Globe,
   Image,
   Inbox,
-  Keyboard,
+  Settings2,
   Languages,
   Lightbulb,
   Link2,
@@ -48,6 +48,7 @@ import {
 } from 'lucide-react'
 import type { AgentEffort, SavedTool } from '@shared/types'
 import { EFFORT_OPTIONS, MODEL_OPTIONS } from '@shared/types'
+import type { EngineState, ModelInfo } from '@shared/engines'
 import { api, errorMessage } from '@/lib/api'
 import { useApp } from '@/store/app'
 import { cn, formatRelativeTime } from '@/lib/utils'
@@ -274,17 +275,24 @@ function ToolCard({
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          {/*
+            A gear, because the panel behind it is settings.
+
+            It was a keyboard, from when a shortcut was the only thing in there. It has held the
+            window options for a while and now holds the model and thinking level too — an icon
+            that names one row of a panel sends people looking for the rest elsewhere.
+          */}
           {interactive && (
-            <Tooltip content="Shortcut and window">
+            <Tooltip content="Tool settings">
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="Shortcut and window settings"
+                aria-label="Tool settings"
                 aria-expanded={settingsOpen}
                 onClick={() => setSettingsOpen((value) => !value)}
                 className={cn(settingsOpen && 'text-foreground')}
               >
-                <Keyboard className="size-3.5" />
+                <Settings2 className="size-3.5" />
               </Button>
             </Tooltip>
           )}
@@ -492,48 +500,134 @@ function ToolShortcutSettings({
         </div>
       )}
 
-      {/* A tool's jobs are not the app's jobs: a phrase rewriter wants the fastest
-          model on the smallest budget so a press feels instant, a weekly review
-          wants the opposite. "App default" keeps it following the footer setting. */}
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-muted-foreground">Model</span>
-        <NativeSelect
-          aria-label="Model for this tool"
-          value={tool.model ?? ''}
-          onChange={async (value) => {
-            await api.setToolModelPrefs({ id: tool.id, model: value === '' ? null : value })
-            onChanged()
-          }}
-          options={[
-            { value: '', label: 'App default' },
-            ...MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
-          ]}
-        />
-      </div>
+      {/*
+        A tool's jobs are not the app's jobs: a phrase rewriter wants the fastest model on the
+        smallest budget so a press feels instant, a weekly review wants the opposite.
 
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-muted-foreground">Thinking</span>
-        <NativeSelect
-          aria-label="Thinking budget for this tool"
-          value={tool.effort ?? ''}
-          onChange={async (value) => {
-            await api.setToolModelPrefs({
-              id: tool.id,
-              effort: value === '' ? null : (value as AgentEffort)
-            })
-            onChanged()
-          }}
-          options={[
-            { value: '', label: 'App default' },
-            ...EFFORT_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
-          ]}
-        />
-      </div>
+        Offered in the *selected engine's* vocabulary, because that is the only vocabulary the
+        choice can be made in. It used to be a fixed list of four Claude names and five Claude
+        tiers whatever the engine was — so on Codex it offered "Opus 5", and the manager, quite
+        correctly, threw the answer away rather than send a name Codex has never heard of. The
+        setting was visible, settable, and inert.
+      */}
+      <ToolEnginePrefs tool={tool} onChanged={onChanged} />
 
       {message && (
         <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">{message}</p>
       )}
     </div>
+  )
+}
+
+
+/**
+ * This tool's model and thinking level, in the terms of whatever engine is running.
+ *
+ * Reads the same two sources the Engine tab does — the selected provider and its catalogue — so
+ * there is one answer to "what can I choose" rather than two that drift. The stored value is
+ * keyed by provider, so switching engine shows that engine's choice and leaves the others alone;
+ * switching back finds the old one.
+ *
+ * Codex publishes its thinking levels per model and those are used verbatim (they include levels
+ * the app's own union does not have); everyone else gets the app's five, which `reasoningPatch`
+ * knows how to say in each provider's dialect.
+ */
+function ToolEnginePrefs({
+  tool,
+  onChanged
+}: {
+  tool: SavedTool
+  onChanged: () => void
+}): React.JSX.Element {
+  const [engine, setEngine] = useState<EngineState | null>(null)
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [configured, setConfigured] = useState<{ model: string | null } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const state = await api.engineState()
+        if (cancelled) return
+        setEngine(state)
+
+        // The Claude CLI publishes no catalogue; its four names are the app's own short list.
+        if (state.capabilities.engine === 'claude-cli') return
+        const result = await api.engineModels(state.selectedProviderId)
+        if (cancelled) return
+        setModels(result.models)
+        setConfigured(result.configured ?? null)
+      } catch {
+        // A provider that cannot be reached leaves the pickers on "app default", which is the
+        // honest state: nothing can be chosen from a list that did not arrive.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!engine) return <></>
+
+  const providerId = engine.selectedProviderId
+  const claude = engine.capabilities.engine === 'claude-cli'
+  const current = tool.enginePrefs[providerId] ?? {}
+
+  const modelOptions = claude
+    ? MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
+    : models.map((model) => ({ value: model.id, label: model.label }))
+
+  /*
+   * Codex's levels belong to the model, and the model may be the one in the user's own config.
+   *
+   * A tool that follows the app's model still has a model — whatever Codex is set to — so its
+   * levels are the ones to offer. Without resolving that, choosing "app default" for the model
+   * would leave the thinking picker empty for the commonest case.
+   */
+  const codexModel = current.model || configured?.model || ''
+  const levels = models.find((model) => model.id === codexModel)?.reasoningLevels ?? []
+  const effortOptions =
+    engine.capabilities.engine === 'codex-cli'
+      ? levels.map((level: { effort: string }) => ({ value: level.effort, label: level.effort }))
+      : EFFORT_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
+
+  const save = async (prefs: { model?: string | null; effort?: string | null }): Promise<void> => {
+    await api.setToolModelPrefs({ id: tool.id, ...prefs })
+    onChanged()
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-muted-foreground">
+          Model
+          {/* Named, so it is obvious the choice belongs to this engine and not to all of them. */}
+          <span className="ml-1 opacity-60">on {engine.capabilities.providerId}</span>
+        </span>
+        <NativeSelect
+          aria-label="Model for this tool"
+          value={current.model ?? ''}
+          onChange={(value) => void save({ model: value === '' ? null : value })}
+          options={[{ value: '', label: 'App default' }, ...modelOptions]}
+        />
+      </div>
+
+      {/*
+        Hidden rather than shown empty when the engine publishes no levels for the chosen model,
+        because an empty picker reads as a broken control rather than as an absent capability.
+      */}
+      {effortOptions.length > 0 && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-muted-foreground">Thinking</span>
+          <NativeSelect
+            aria-label="Thinking budget for this tool"
+            value={current.effort ?? ''}
+            onChange={(value) => void save({ effort: value === '' ? null : value })}
+            options={[{ value: '', label: 'App default' }, ...effortOptions]}
+          />
+        </div>
+      )}
+    </>
   )
 }
 
