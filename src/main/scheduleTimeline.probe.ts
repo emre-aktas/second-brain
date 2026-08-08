@@ -101,8 +101,7 @@ function tasks(now: number): ScheduledTask[] {
   const base = {
     prompt: 'x',
     capability: 'curate' as const,
-    model: null,
-    effort: null,
+    enginePrefs: {},
     sessionId: null,
     createdBy: 'user' as const,
     createdAt: now,

@@ -14,7 +14,14 @@ interface Migration {
  * corrupted or unreadable index can always be dropped and rebuilt from the
  * markdown files — that keeps migrations low-risk.
  */
-const MIGRATIONS: Migration[] = [
+/**
+ * Exported so a probe can stop part-way and prove an upgrade path.
+ *
+ * A migration that backfills existing rows is the one kind that cannot be checked against a
+ * fresh database — and a fresh database is all any other test ever creates. Someone's tools have
+ * a model pinned; the question is whether it is still pinned afterwards.
+ */
+export const MIGRATIONS: Migration[] = [
   {
     version: 1,
     name: 'initial',
@@ -463,6 +470,41 @@ const MIGRATIONS: Migration[] = [
       -- Backfilled to 'claude-cli' because that is the only engine that existed until now.
       ALTER TABLE sessions ADD COLUMN engine TEXT;
       UPDATE sessions SET engine = 'claude-cli' WHERE claude_session_id IS NOT NULL;
+    `
+  },
+  {
+    version: 19,
+    name: 'per-engine-tool-prefs',
+    up: `
+      -- A tool's model and thinking level, per engine.
+      --
+      -- \`model\` and \`effort\` held one value each, and that value was a *Claude* name: "opus",
+      -- "high". So the manager could only honour them on Claude — on any other engine a tool's
+      -- carefully chosen fast model was discarded and the turn ran on whatever the provider was
+      -- set to globally. The setting existed, the UI offered it, and it silently did nothing.
+      --
+      -- Keyed by provider id, exactly like \`Settings.engine.models\`, because that is what the
+      -- choice actually is: "on Codex use this, on DeepSeek use that". A tool set up before the
+      -- switch keeps working after it, and switching back finds its old choice intact.
+      --
+      -- The old columns are left in place. SQLite cannot drop one without rewriting the table,
+      -- and a value nobody reads is cheaper than a rewrite that could fail on someone's vault.
+      ALTER TABLE saved_tools ADD COLUMN engine_prefs TEXT;
+      ALTER TABLE scheduled_tasks ADD COLUMN engine_prefs TEXT;
+
+      UPDATE saved_tools
+         SET engine_prefs = json_object('claude-cli', json_object(
+               'model', model,
+               'effort', effort
+             ))
+       WHERE model IS NOT NULL OR effort IS NOT NULL;
+
+      UPDATE scheduled_tasks
+         SET engine_prefs = json_object('claude-cli', json_object(
+               'model', model,
+               'effort', effort
+             ))
+       WHERE model IS NOT NULL OR effort IS NOT NULL;
     `
   }
 ]

@@ -287,8 +287,9 @@ export class Scheduler {
         taskRun: { taskId: task.id, taskName: task.name, runId: runRow.id },
         // Nobody is watching, so it may read the outside world but not write to it.
         unattended: true,
-        ...(task.model ? { model: task.model } : {}),
-        ...(task.effort ? { effort: task.effort } : {})
+        // The whole per-engine map; the manager picks the entry for whichever engine is
+        // running. A task pinned to a model on one provider keeps that choice on the others.
+        enginePrefs: task.enginePrefs
       })
 
       const reply = await this.agent.awaitTurn(sessionId)

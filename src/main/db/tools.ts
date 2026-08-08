@@ -1,6 +1,6 @@
 import type { Db } from './sqlite'
 import type {
-  AgentEffort,
+  EnginePrefs,
   SavedTool,
   SavedToolParam,
   ToolAction,
@@ -11,6 +11,32 @@ import type {
 } from '@shared/types'
 import { readPath, writePath } from '@shared/bindings'
 import { ulid } from '../util/id'
+
+/**
+ * The stored per-engine preferences, defensively.
+ *
+ * Hand-editable JSON in a column, so a bad shape must not reach the manager: a non-string model
+ * would be handed to a provider as a model name. Absent, unparseable and malformed all collapse
+ * to "no override", which is the same as the default.
+ */
+export function parseEnginePrefs(raw: string | null): EnginePrefs {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const out: EnginePrefs = {}
+    for (const [providerId, value] of Object.entries(parsed ?? {})) {
+      if (!value || typeof value !== 'object') continue
+      const entry = value as { model?: unknown; effort?: unknown }
+      const kept: { model?: string; effort?: string } = {}
+      if (typeof entry.model === 'string' && entry.model) kept.model = entry.model
+      if (typeof entry.effort === 'string' && entry.effort) kept.effort = entry.effort
+      if (Object.keys(kept).length > 0) out[providerId] = kept
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 interface ToolRow {
   id: string
@@ -39,8 +65,7 @@ interface ToolRow {
   always_on_top: number
   layout: string
   source: string
-  model: string | null
-  effort: string | null
+  engine_prefs: string | null
   window_width: number | null
   window_height: number | null
   window_maximized: number
@@ -55,8 +80,6 @@ function readSize(value: number | null, min: number, max: number): number | null
   const rounded = Math.round(value)
   return rounded >= min && rounded <= max ? rounded : null
 }
-
-const EFFORTS: AgentEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 const TOOL_KINDS: ToolKind[] = [
   'prompt',
@@ -165,11 +188,7 @@ function toTool(row: ToolRow): SavedTool {
     alwaysOnTop: row.always_on_top === 1,
     layout: parseArray<ToolNode>(row.layout),
     source: row.source ?? '',
-    model: row.model,
-    // A value from an older build, or a hand-edited row, must not reach the CLI.
-    effort: (EFFORTS as string[]).includes(row.effort ?? '')
-      ? (row.effort as AgentEffort)
-      : null,
+    enginePrefs: parseEnginePrefs(row.engine_prefs),
     // Nonsense stored here would open a window too small to use, so it is dropped
     // rather than clamped — falling back to the default size is the honest result.
     windowWidth: readSize(row.window_width, MIN_TOOL_WINDOW.width, MAX_TOOL_WINDOW.width),
@@ -217,8 +236,7 @@ export interface SaveToolInput {
   alwaysOnTop?: boolean
   layout?: ToolNode[]
   source?: string
-  model?: string | null
-  effort?: AgentEffort | null
+  enginePrefs?: EnginePrefs
   windowWidth?: number | null
   windowHeight?: number | null
 }
@@ -253,9 +271,9 @@ export class ToolStore {
       `INSERT INTO saved_tools
          (id, name, description, icon, prompt, params, pinned, sort_order, created_by,
           created_at, updated_at, kind, instructions, state, rev, actions, fields,
-          hotkey, open_in_window, always_on_top, layout, source, model, effort,
+          hotkey, open_in_window, always_on_top, layout, source, engine_prefs,
           window_width, window_height)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          description = excluded.description,
@@ -274,8 +292,7 @@ export class ToolStore {
          always_on_top = excluded.always_on_top,
          layout = excluded.layout,
          source = excluded.source,
-         model = excluded.model,
-         effort = excluded.effort,
+         engine_prefs = excluded.engine_prefs,
          window_width = excluded.window_width,
          window_height = excluded.window_height`,
       [
@@ -301,8 +318,9 @@ export class ToolStore {
         (input.alwaysOnTop ?? existing?.alwaysOnTop) ? 1 : 0,
         JSON.stringify(layout),
         input.source ?? existing?.source ?? '',
-        input.model !== undefined ? input.model : (existing?.model ?? null),
-        input.effort !== undefined ? input.effort : (existing?.effort ?? null),
+        input.enginePrefs !== undefined
+          ? JSON.stringify(input.enginePrefs)
+          : JSON.stringify(existing?.enginePrefs ?? {}),
         // Never reset by a plain re-save: the size is the user's, and rebuilding a
         // tool's interface should not move its window back to the default.
         input.windowWidth !== undefined ? input.windowWidth : (existing?.windowWidth ?? null),
@@ -447,14 +465,39 @@ export class ToolStore {
     )
   }
 
-  /** Null for either means "follow the app's setting". */
-  setModelPrefs(id: string, prefs: { model?: string | null; effort?: AgentEffort | null }): void {
+  /**
+   * One engine's model or thinking level for this tool. Null for either clears it.
+   *
+   * Scoped to a provider because a model name belongs to one. Writing the whole object would
+   * mean a caller that knows about Codex silently dropping the DeepSeek choice beside it, so the
+   * stored map is merged rather than replaced.
+   */
+  setModelPrefs(
+    id: string,
+    providerId: string,
+    prefs: { model?: string | null; effort?: string | null }
+  ): void {
+    const existing = this.get(id)
+    if (!existing) return
+
+    const next: EnginePrefs = { ...existing.enginePrefs }
+    const entry = { ...(next[providerId] ?? {}) }
+
     if (prefs.model !== undefined) {
-      this.db.run('UPDATE saved_tools SET model = ? WHERE id = ?', [prefs.model, id])
+      if (prefs.model) entry.model = prefs.model
+      else delete entry.model
     }
     if (prefs.effort !== undefined) {
-      this.db.run('UPDATE saved_tools SET effort = ? WHERE id = ?', [prefs.effort, id])
+      if (prefs.effort) entry.effort = prefs.effort
+      else delete entry.effort
     }
+
+    // An empty entry is removed rather than stored, so "follow the app" reads as absence
+    // everywhere instead of as an object full of undefined.
+    if (Object.keys(entry).length > 0) next[providerId] = entry
+    else delete next[providerId]
+
+    this.db.run('UPDATE saved_tools SET engine_prefs = ? WHERE id = ?', [JSON.stringify(next), id])
   }
 
   /** Another tool already holding this accelerator, if any. */

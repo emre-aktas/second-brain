@@ -272,9 +272,14 @@ export type AgentCapability = 'read-only' | 'curate' | 'build'
 export interface AgentTurnOptions {
   sessionId?: string
   capability?: AgentCapability
-  /** Overrides the app's setting for this turn. A tool can carry its own. */
-  model?: string
-  effort?: AgentEffort
+  /**
+   * Overrides the app's model and thinking level for this turn, per engine.
+   *
+   * A saved tool or a scheduled task carries its own; the manager picks the entry belonging to
+   * whichever engine is running. One flat `model` here meant a Claude name, so on any other
+   * engine the override had to be discarded — which is why the whole map travels instead.
+   */
+  enginePrefs?: EnginePrefs
   /** Hidden context appended to the user's message (e.g. the node they had open). */
   context?: string
   /** Present when a saved tool started this turn. */
@@ -503,6 +508,17 @@ export interface IntegrationTool {
 }
 
 /* ------------------------------------------------------------ saved tools */
+
+/**
+ * A per-engine model and thinking level, for the things that can pin their own.
+ *
+ * Keyed by provider id. Empty means "whatever the app is set to", which is the
+ * default and the right one for most tools — the override exists for the few
+ * whose job has a different shape from the rest of the app's.
+ */
+export interface EnginePrefs {
+  [providerId: string]: { model?: string; effort?: string }
+}
 
 export interface SavedToolParam {
   name: string
@@ -760,14 +776,20 @@ export interface SavedTool {
   windowHeight: number | null
   windowMaximized: boolean
   /**
-   * Model and thinking budget for this tool's own turns, or null for the app's.
+   * Model and thinking level for this tool's own turns, per engine.
    *
    * Set per tool because the jobs differ: a phrase rewriter wants the fastest
    * model at low effort so a button press feels instant, while a weekly review
    * wants the opposite and can afford to take its time.
+   *
+   * Per *engine* because a model name belongs to one provider. This was a single
+   * pair of fields holding a Claude name — "opus", "high" — so on any other engine
+   * the manager had to discard it, and a tool's carefully chosen fast model quietly
+   * became whatever that provider was set to globally. Keyed by provider id like
+   * `Settings.engine.models`, a tool set up on Codex keeps its Codex choice and
+   * finds its Claude one again on the way back.
    */
-  model: string | null
-  effort: AgentEffort | null
+  enginePrefs: EnginePrefs
   /** Bumped on every write; a write against a stale rev is rejected. */
   rev: number
   /** A lucide icon name. Falls back to a generic one when unknown. */
@@ -1000,8 +1022,8 @@ export interface ScheduledTask {
   schedule: Schedule
   enabled: boolean
   capability: AgentCapability
-  model: string | null
-  effort: AgentEffort | null
+  /** Model and thinking level for this task's runs, per engine. See `EnginePrefs`. */
+  enginePrefs: EnginePrefs
   /** The task's own chat, created on first run so a run never interrupts the user. */
   sessionId: string | null
   createdBy: 'user' | 'agent' | 'system'

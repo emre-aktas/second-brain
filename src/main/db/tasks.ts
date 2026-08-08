@@ -1,13 +1,14 @@
 import type { Db } from './sqlite'
 import type {
   AgentCapability,
-  AgentEffort,
+  EnginePrefs,
   ScheduledTask,
   TaskKind,
   TaskRun,
   TaskStatus
 } from '@shared/types'
 import { normaliseSchedule, type Schedule } from '@shared/schedule'
+import { parseEnginePrefs } from './tools'
 import { ulid } from '../util/id'
 
 interface TaskRow {
@@ -18,8 +19,7 @@ interface TaskRow {
   schedule: string
   enabled: number
   capability: string
-  model: string | null
-  effort: string | null
+  engine_prefs: string | null
   session_id: string | null
   created_by: string
   created_at: number
@@ -39,8 +39,7 @@ export interface SaveTaskInput {
   schedule: unknown
   enabled?: boolean
   capability?: AgentCapability
-  model?: string | null
-  effort?: AgentEffort | null
+  enginePrefs?: EnginePrefs
   createdBy?: 'user' | 'agent' | 'system'
   nextRunAt?: number | null
 }
@@ -63,8 +62,7 @@ function hydrate(row: TaskRow): ScheduledTask {
     schedule,
     enabled: row.enabled === 1,
     capability: row.capability as AgentCapability,
-    model: row.model,
-    effort: row.effort as AgentEffort | null,
+    enginePrefs: parseEnginePrefs(row.engine_prefs),
     sessionId: row.session_id,
     createdBy: (row.created_by as ScheduledTask['createdBy']) ?? 'user',
     createdAt: row.created_at,
@@ -95,10 +93,10 @@ export class TaskStore {
 
     this.db.run(
       `INSERT INTO scheduled_tasks
-         (id, name, prompt, kind, schedule, enabled, capability, model, effort,
+         (id, name, prompt, kind, schedule, enabled, capability, engine_prefs,
           session_id, created_by, created_at, updated_at, next_run_at,
           last_run_at, last_status, last_summary, run_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          prompt = excluded.prompt,
@@ -106,8 +104,7 @@ export class TaskStore {
          schedule = excluded.schedule,
          enabled = excluded.enabled,
          capability = excluded.capability,
-         model = excluded.model,
-         effort = excluded.effort,
+         engine_prefs = excluded.engine_prefs,
          updated_at = excluded.updated_at,
          next_run_at = excluded.next_run_at`,
       [
@@ -118,8 +115,7 @@ export class TaskStore {
         JSON.stringify(schedule),
         (input.enabled ?? existing?.enabled ?? true) ? 1 : 0,
         input.capability ?? existing?.capability ?? 'curate',
-        input.model ?? existing?.model ?? null,
-        input.effort ?? existing?.effort ?? null,
+        JSON.stringify(input.enginePrefs ?? existing?.enginePrefs ?? {}),
         existing?.sessionId ?? null,
         input.createdBy ?? existing?.createdBy ?? 'user',
         existing?.createdAt ?? now,

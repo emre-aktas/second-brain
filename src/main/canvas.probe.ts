@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import type { ToolAction, ToolNode } from '@shared/types'
 import { interpolate, writePath } from '@shared/bindings'
 import { Db } from './db/sqlite'
-import { migrate } from './db/schema'
+import { MIGRATIONS, migrate } from './db/schema'
 import { ToolStore, seedCanvasState } from './db/tools'
 import { checkCanvas } from './agent/tools'
 import { ensureWorkspace, type AppPaths } from './paths'
@@ -141,9 +141,49 @@ function designPathsFor(designFile: string): AppPaths {
   }
 }
 
+  /*
+   * The upgrade path, on a database that already has a pinned model.
+   *
+   * Everything above runs against a fresh store, which is the one case a backfill cannot fail.
+   * Someone upgrading has tools with `model = 'haiku'` in the old columns, and the question that
+   * matters to them is whether the tool still runs on haiku afterwards.
+   */
+  const legacy = new Db(':memory:')
+  for (const migration of MIGRATIONS) {
+    if (migration.version >= 19) break
+    legacy.exec(migration.up)
+  }
+  legacy.run(
+    `INSERT INTO saved_tools (id, name, description, prompt, params, pinned, sort_order,
+       created_by, created_at, updated_at, kind, state, rev, model, effort)
+     VALUES ('old', 'Old tool', '', '', '[]', 0, 0, 'user', 0, 0, 'prompt', '{}', 0, 'haiku', 'low')`
+  )
+  legacy.exec(MIGRATIONS[18]!.up)
+
+  const migrated = new ToolStore(legacy).get('old')
+  check(
+    'an existing tool keeps its model through the upgrade',
+    migrated?.enginePrefs['claude-cli']?.model === 'haiku',
+    migrated?.enginePrefs
+  )
+  check(
+    'and its thinking level',
+    migrated?.enginePrefs['claude-cli']?.effort === 'low',
+    migrated?.enginePrefs
+  )
+
 /** Per-tool model and thinking budget, and the design brief the agent reads. */
 function checkToolPrefsAndBrief(store: ToolStore, designFile: string): void {
   console.log('\nper-tool model and thinking')
+
+  /*
+   * Per engine, because a model name belongs to one provider.
+   *
+   * These were a single `model`/`effort` pair holding a Claude name, so the manager could only
+   * honour them on Claude — on any other engine a tool's chosen fast model was discarded and the
+   * turn ran on whatever that provider was set to globally. The setting existed, the panel
+   * offered it, and it silently did nothing.
+   */
   const tool = store.save({
     name: 'Hızlı çeviri',
     description: 'Tek cümle çevirir',
@@ -151,16 +191,15 @@ function checkToolPrefsAndBrief(store: ToolStore, designFile: string): void {
     kind: 'code',
     source: '<div id="x"></div><script>brain.run("go", {})</script>',
     actions: [{ id: 'go', label: 'Çevir', prompt: 'x', target: 'output' }],
-    model: 'haiku',
-    effort: 'low',
+    enginePrefs: { 'claude-cli': { model: 'haiku', effort: 'low' } },
     createdBy: 'agent'
   })
 
   const reloaded = store.get(tool.id)!
-  check('model round-trips', reloaded.model === 'haiku', reloaded.model)
-  check('effort round-trips', reloaded.effort === 'low', reloaded.effort)
+  check('model round-trips', reloaded.enginePrefs['claude-cli']?.model === 'haiku', reloaded.enginePrefs)
+  check('effort round-trips', reloaded.enginePrefs['claude-cli']?.effort === 'low', reloaded.enginePrefs)
 
-  // Omitting the fields must not silently reset them: only an explicit null does.
+  // Omitting the field must not silently reset it: only an explicit change does.
   store.save({
     id: tool.id,
     name: reloaded.name,
@@ -171,19 +210,41 @@ function checkToolPrefsAndBrief(store: ToolStore, designFile: string): void {
     actions: reloaded.actions,
     createdBy: 'agent'
   })
-  check('a save that omits them keeps them', store.get(tool.id)!.model === 'haiku')
+  check(
+    'a save that omits them keeps them',
+    store.get(tool.id)!.enginePrefs['claude-cli']?.model === 'haiku'
+  )
 
-  store.setModelPrefs(tool.id, { model: null, effort: null })
+  /*
+   * A second engine's choice sits beside the first rather than replacing it.
+   *
+   * This is the point of the shape: "on Codex use the flagship at ultra, on Claude use haiku at
+   * low" is one tool with two answers, and switching engine has to find the right one rather
+   * than the last one written.
+   */
+  store.setModelPrefs(tool.id, 'codex-cli', { model: 'gpt-5.6-sol', effort: 'ultra' })
+  const both = store.get(tool.id)!
+  check('a second engine is stored beside the first', both.enginePrefs['codex-cli']?.model === 'gpt-5.6-sol', both.enginePrefs)
+  check('and the first is untouched', both.enginePrefs['claude-cli']?.model === 'haiku', both.enginePrefs)
+  // A level from the engine's own ladder, which the app's five-tier union does not contain.
+  check('an engine-specific level is kept verbatim', both.enginePrefs['codex-cli']?.effort === 'ultra')
+
+  store.setModelPrefs(tool.id, 'claude-cli', { model: null, effort: null })
   const cleared = store.get(tool.id)!
-  check('cleared back to the app default', cleared.model === null && cleared.effort === null)
+  check('cleared back to the app default', cleared.enginePrefs['claude-cli'] === undefined, cleared.enginePrefs)
+  check('without disturbing the other engine', cleared.enginePrefs['codex-cli']?.model === 'gpt-5.6-sol')
 
-  store.setModelPrefs(tool.id, { effort: 'max' })
-  check('one can be set without the other', store.get(tool.id)!.effort === 'max')
-  check('and the other stays null', store.get(tool.id)!.model === null)
+  store.setModelPrefs(tool.id, 'deepseek', { effort: 'max' })
+  check('one can be set without the other', store.get(tool.id)!.enginePrefs['deepseek']?.effort === 'max')
+  check('and no model comes with it', store.get(tool.id)!.enginePrefs['deepseek']?.model === undefined)
 
-  // A value from a hand-edited row must never reach the CLI as --effort.
-  store.setModelPrefs(tool.id, { effort: 'ludicrous' as never })
-  check('a nonsense effort is read back as null', store.get(tool.id)!.effort === null)
+  // Hand-edited rows exist; a non-string must not reach a provider as a model name.
+  store.setModelPrefs(tool.id, 'deepseek', { model: 42 as never })
+  check(
+    'a non-string model is not stored',
+    typeof store.get(tool.id)!.enginePrefs['deepseek']?.model !== 'number',
+    store.get(tool.id)!.enginePrefs
+  )
 
   console.log('\ndesign brief')
   // Through the real seeding path, so the bundled copy and the vault file are
