@@ -8,6 +8,12 @@ load-bearing — `notesFromChangelog` in `src/main/updater.ts` finds a release b
 Keep them as `## <version>` with the newest first. `npm run release` writes the skeleton for a
 new one from the commits since the last release; edit it before pushing.
 
+## 0.5.0
+
+*2026-08-08*
+
+- Walk a beginner through installing and signing in to a CLI
+
 ## 0.4.0
 
 *2026-08-08*
