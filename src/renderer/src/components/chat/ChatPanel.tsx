@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NodeProse } from '@/components/NodeProse'
-import { CalendarClock, ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
+import { AlertTriangle, CalendarClock, ChevronRight, Eye, EyeOff, Plus } from 'lucide-react'
 import { friendlyToolLabel } from '@/lib/tool-labels'
 import { toolIcon } from '@/components/panels/ToolsPanel'
 import type { AgentCapability, ChatBlock, ChatImage, ChatMessage } from '@shared/types'
@@ -42,6 +42,7 @@ export function ChatPanel(): React.JSX.Element {
   const agentState = useApp((s) => activeChat(s).agentState)
   const activeStep = useApp((s) => activeChat(s).activeStep)
   const allQuestions = useApp((s) => s.questions)
+  const setPanel = useApp((s) => s.setPanel)
   const answerQuestion = useApp((s) => s.answerQuestion)
   const showActivity = useApp((s) => s.settings?.chat.showToolActivity ?? false)
   const updateSettings = useApp((s) => s.updateSettings)
@@ -49,7 +50,21 @@ export function ChatPanel(): React.JSX.Element {
   const genui = useApp((s) => s.genui)
   const nodes = useApp((s) => s.graph.nodes)
   const session = useApp((s) => s.session)
-  const agentAvailable = useApp((s) => s.bootstrap?.agent.available ?? false)
+  /*
+   * Whether *the selected engine* can run a turn — not whether Claude is installed.
+   *
+   * This read `bootstrap.agent.available`, which is `resolveClaudeBinary() !== null`: a fact
+   * about one engine gating the composer for all of them. With DeepSeek selected, configured and
+   * working, the chat still refused to accept a message and explained that the Claude CLI was
+   * missing. `engine.blocked` is the same sentence the Engine tab shows, computed from the engine
+   * that would actually answer.
+   *
+   * Null while the first read is in flight, and that is deliberately treated as available: a
+   * composer briefly enabled and then disabled is a smaller lie than one wrongly disabled, and a
+   * turn attempted before the engine is ready fails with the reason rather than silently.
+   */
+  const blocked = useApp((s) => s.engine?.blocked ?? null)
+  const agentAvailable = blocked === null
 
   const sendMessage = useApp((s) => s.sendMessage)
   const interrupt = useApp((s) => s.interrupt)
@@ -196,7 +211,7 @@ export function ChatPanel(): React.JSX.Element {
 
       <ScrollArea className="min-h-0 flex-1" viewportRef={viewportRef} onViewportScroll={handleScroll}>
         <div className="flex flex-col gap-5 px-3 py-4">
-          {messages.length === 0 && !streaming && <ChatIntro available={agentAvailable} />}
+          {messages.length === 0 && !streaming && <ChatIntro />}
 
           {turns.map((turn, index) => (
             <div
@@ -281,6 +296,26 @@ export function ChatPanel(): React.JSX.Element {
           what shows focus — `focus-within` on the surface rather than a ring on the field,
           so the thing that lights up is the thing the user thinks of as the input.
         */}
+        {/*
+          Why the composer is dead, next to the composer.
+
+          This lived in the chat's empty state, which meant only someone starting a fresh
+          conversation ever saw it. Anyone whose engine stopped being usable mid-thread got a
+          disabled box and no reason at all — the worse half of the same bug. Here it is shown
+          whenever it is true, and it carries the route to the one screen that fixes it.
+        */}
+        {blocked && (
+          <div className="mb-1.5 flex items-start gap-2 rounded-md border border-warning/30 bg-warning/8 px-2.5 py-2">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warning" />
+            <p className="min-w-0 flex-1 text-[12px] leading-snug text-warning text-pretty">
+              {blocked}
+            </p>
+            <Button size="xs" className="shrink-0" onClick={() => setPanel('engine')}>
+              Open the Engine tab
+            </Button>
+          </div>
+        )}
+
         <div
           className={cn(
             'rounded-lg border border-input bg-card/40 px-2.5 py-2',
@@ -314,7 +349,7 @@ export function ChatPanel(): React.JSX.Element {
                   // open at two lines, because the browser counts it in `scrollHeight` —
                   // so the longer sentence cost the field its one-line resting state.
                   : 'Ask your brain anything'
-                : 'Install Claude Code to enable the agent'
+                : (blocked ?? 'Set up an engine to enable the agent')
             }
             disabled={!agentAvailable}
             className="px-1 py-0.5"
@@ -388,20 +423,7 @@ function CapabilityPicker({
   )
 }
 
-function ChatIntro({ available }: { available: boolean }): React.JSX.Element {
-  if (!available) {
-    return (
-      <div className="rounded-lg border border-warning/30 bg-warning/8 px-3.5 py-3">
-        <p className="text-[13px] font-medium text-warning">The Claude CLI was not found</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground text-pretty">
-          The agent runs your local Claude Code install, so nothing is sent through a separate API
-          key. Install it and make sure <code className="font-mono text-[12px]">claude</code> is on
-          your PATH, then restart.
-        </p>
-      </div>
-    )
-  }
-
+function ChatIntro(): React.JSX.Element {
   return (
     <div className="flex flex-col gap-2.5">
       <p className="text-[13px] leading-relaxed text-muted-foreground text-pretty">

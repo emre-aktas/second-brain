@@ -8,22 +8,103 @@ load-bearing — `notesFromChangelog` in `src/main/updater.ts` finds a release b
 Keep them as `## <version>` with the newest first. `npm run release` writes the skeleton for a
 new one from the commits since the last release; edit it before pushing.
 
+## 0.6.0
+
+*2026-08-08*
+
+### 💬 The chat no longer blocks you over an engine you are not using
+
+If you had picked DeepSeek — or any other provider — and it was working, the chat still refused to
+accept a message and explained that the Claude CLI was missing. It was asking the wrong question:
+whether Claude is installed, rather than whether the engine you actually chose can answer.
+
+Now the composer follows **your** engine. And when something genuinely is wrong, the reason appears
+right above the box you are typing in — not only on an empty conversation, which is where it used
+to hide — with a button straight to the Engine tab.
+
+### 💸 Spend caps: findable, and off until you ask
+
+Two things were wrong here. The caps were tucked inside the Claude-only card, so from DeepSeek —
+the provider that actually charges you — there was no way to reach them at all. And the default
+mode worked out whether to apply itself by reading your *Claude* sign-in, which meant that on a
+Claude plan the caps quietly stood down while a metered provider spent real money.
+
+They now live in the Engine tab for **every** engine, as one switch that is **off by default**.
+Turn it on and you get a daily cap and a per-turn cap; leave it alone and nothing ever stops a turn
+you did not ask to be stopped.
+
+### 📓 Release notes worth reading
+
+These notes used to be the raw list of commit subjects the release script generates. 0.4.0 and
+0.5.0 have been rewritten too, so if you are arriving from an older version there is something
+readable there.
+
 ## 0.5.0
 
 *2026-08-08*
 
-- Walk a beginner through installing and signing in to a CLI
+### 🧭 Getting a CLI installed no longer requires knowing how
+
+Choosing Codex or Claude Code without having it produced a warning and stopped there. Now it opens
+a three-step walkthrough — install, sign in, check — with the command for **your** platform, the
+name of the terminal to paste it into, and a Copy button. Every command is quoted from the
+vendor's current documentation, and the one offered first is the one that needs nothing else
+installed beforehand.
+
+Press "I have installed it" and the app looks again properly, so you do not have to restart it.
+
+### 🔐 Sign-in is its own step, and it is honest
+
+Codex reports itself as signed in even when its session has quietly expired — which is why it
+sometimes stopped working for no visible reason. The app treats "not signed in" as fact and
+anything else as unconfirmed, tells you so, and settles it with the small check at the end
+instead of showing a tick it cannot stand behind.
 
 ## 0.4.0
 
 *2026-08-08*
 
-- Give the Engine tab steps that fit, and a check that means something
-- Keep a tool's model and thinking level per engine
-- Make Codex and the API engines actually reach the vault
-- Store a chosen model for a provider that has none yet
-- Stop sending Claude's model name to every other engine
-- Annotate the release tag, or the release never happens
+### 🤖 Other models actually work now
+
+Codex and the API providers (DeepSeek, OpenRouter, OpenAI, Groq, Together, Ollama, LM Studio, or
+any endpoint that speaks the same dialect) can now read and write your notes properly. Several
+things were quietly broken:
+
+- 🧩 **Your chosen model was never saved.** For any provider. The log said it had been.
+- 💬 **Codex was never given the app's instructions**, so it answered like a stock assistant
+  instead of like something that knows your vault.
+- 🔨 **Codex could not reach your notes at all** — the paths it was handed arrived corrupted, and
+  every tool call it made was being cancelled before it started.
+- 🔁 **Codex conversations were one message long.** The second message failed every time.
+- 🧠 **Thinking levels existed but could not be set** on any API provider.
+- 💸 **Token counts and spend read as zero** on every real provider, so the daily cap could never
+  be reached however much was spent.
+- 🖼️ **Screenshots you pasted were dropped** before the model saw them.
+
+### 🎛️ The Engine tab is a setup flow, not a form
+
+Steps are counted from what your provider actually needs, so no more "step 2 of 2" with no step 1.
+The last step **sends one small message and reports three things separately**: whether it reached
+the provider, whether the model answered, and whether it could call a tool — because "answers but
+will not touch your notes" is the common middle outcome and it decides whether the agent is any
+use. It never runs on its own, and a failure never blocks you.
+
+An engine that needs something now offers the control that provides it. A provider with a key
+stored has a settings card — model, key, address, thinking level — instead of a label.
+
+### 🧰 Tools keep a model per engine
+
+A tool pinned to a fast model kept that choice only on Claude and silently lost it everywhere
+else. Now it is remembered per provider: the flagship at maximum thinking on one, something quick
+and cheap on another, and switching back finds the old choice intact.
+
+### 🔎 Smaller things
+
+- Truncated and empty answers are reported as failures with a reason, rather than as a blank reply.
+- The footer no longer shows your Claude plan while a different provider is answering.
+- ⚠️ Codex runs **unsandboxed**, and the Engine tab says so. Its CLI cancels every tool call
+  unless the sandbox is off, so that is the trade it comes with; the app's own permission setting
+  still governs what it does to your notes.
 
 ## 0.3.0
 

@@ -311,10 +311,16 @@ export class AgentManager {
    * instead. Caps exist for the metered-API-key case.
    */
   capsActive(): boolean {
-    const mode = this.core.settings.budget.mode
-    if (mode === 'off') return false
-    if (mode === 'always') return true
-    return !this.onSubscription()
+    /*
+     * One question, asked once: did the user turn this on.
+     *
+     * There used to be an `auto` mode that decided for itself whether spend was metered, and it
+     * decided by reading the *Claude* CLI's auth method — so a DeepSeek user on a Claude plan had
+     * their caps stand down while real money was being spent, and `auto` was the default so
+     * nobody had chosen it. A guard that guesses at whether it applies is a guard you cannot
+     * reason about.
+     */
+    return this.core.settings.budget.mode === 'on'
   }
 
   private subscriptionCache: boolean | null = null

@@ -876,11 +876,18 @@ export interface Settings {
    */
   budget: {
     /**
-     * 'auto' applies caps only when the CLI is billing metered API credits —
-     * on a subscription there is no per-token charge to cap. 'always' enforces
-     * them regardless, 'off' never does.
+     * Off unless the user turns it on, and that is the whole of it.
+     *
+     * There used to be a third mode, `auto`, which applied caps "only when billing metered API
+     * credits" — and decided that by reading the *Claude* CLI's auth method, so a DeepSeek user
+     * on a Claude plan had their caps stand down while real money was being spent. It was also
+     * the default, which meant nobody had chosen it and no explanation of it was ever going to
+     * be read. Two states cannot disagree with themselves: a spend cap is a thing you ask for.
+     *
+     * A stored `auto` reads back as `off` and a stored `always` as `on`, which preserves what
+     * each of them actually meant to the person who left it there.
      */
-    mode: 'auto' | 'always' | 'off'
+    mode: 'off' | 'on'
     /** Refuse to start a turn once today's reported usage reaches this. */
     dailyLimitUsd: number
     /** Passed to the CLI as --max-budget-usd, which aborts the turn itself. */

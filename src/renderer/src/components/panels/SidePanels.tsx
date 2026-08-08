@@ -520,8 +520,9 @@ export function SettingsPanel(): React.JSX.Element {
               charge of something the Engine tab now owns.
             */}
             <p className="text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
-              The model, its thinking budget, spend caps and plan usage all live in the Engine tab
-              now — they belong to whichever provider is running the agent.
+              The model, its thinking level, spend caps and plan usage all live in the Engine tab
+              — they belong to whichever provider is running the agent, so they change when it
+              does. Spend caps are off until you turn them on.
             </p>
             <Button
               size="xs"
@@ -925,6 +926,113 @@ function UpdateCheck(): React.JSX.Element {
  * Shown for the Claude engine alone. On any other provider the CLI version, the plan and the
  * usage windows are answers to questions nobody asked.
  */
+/**
+ * Spend caps, for whichever engine is running.
+ *
+ * Its own component and rendered for every engine, because it used to live inside
+ * `ClaudeEngineDetails` — which the Engine tab only draws when Claude is selected. So the one
+ * screen with the word "spend" on it was unreachable from the providers that actually charge you,
+ * and someone looking for the switch in Settings found a sentence telling them it was elsewhere,
+ * in a place it was not.
+ *
+ * One switch, off by default. The three-way mode it replaced defaulted to "on when metered" and
+ * worked out "metered" by reading the Claude CLI's auth method, so it stood down on DeepSeek
+ * while real money was being spent. A cap is a thing you ask for.
+ */
+export function SpendCaps(): React.JSX.Element | null {
+  const settings = useApp((s) => s.settings)
+  const updateSettings = useApp((s) => s.updateSettings)
+  const budget = useApp((s) => s.budget)
+  const engine = useApp((s) => s.engine)
+
+  if (!settings) return null
+
+  const on = settings.budget.mode === 'on'
+  const metered = engine?.capabilities?.metered === true
+
+  return (
+    <Card className="bg-card/60 px-3 py-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium text-foreground">Spend caps</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground text-pretty">
+            {/*
+              Two different sentences, because the answer differs and pretending otherwise is how
+              the old copy came to tell a DeepSeek user they were on a Claude plan.
+            */}
+            {metered
+              ? 'This engine charges your own account per token. Turn these on to stop a day from running away.'
+              : 'This engine does not charge per token, so there is nothing here to protect. You can still cap it if you want a ceiling on what a turn may report.'}
+          </p>
+        </div>
+        <Switch
+          checked={on}
+          onCheckedChange={(next) =>
+            void updateSettings({ budget: { ...settings.budget, mode: next ? 'on' : 'off' } })
+          }
+        />
+      </div>
+
+      {on && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">Daily cap</span>
+            <NumberInput
+              value={settings.budget.dailyLimitUsd}
+              step={0.25}
+              min={0.25}
+              onChange={(dailyLimitUsd) =>
+                void updateSettings({ budget: { ...settings.budget, dailyLimitUsd } })
+              }
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">Per-turn cap</span>
+            <NumberInput
+              value={settings.budget.perTurnLimitUsd}
+              step={0.05}
+              min={0.05}
+              onChange={(perTurnLimitUsd) =>
+                void updateSettings({ budget: { ...settings.budget, perTurnLimitUsd } })
+              }
+            />
+          </div>
+
+          {budget?.enabled && (
+            <div className="mt-1">
+              <div className="mb-1 flex items-baseline justify-between text-[11px]">
+                <span className="text-muted-foreground">Used today</span>
+                <span className="tabular-nums text-foreground">
+                  {budget.spentToday.toFixed(2)} / {budget.dailyLimitUsd.toFixed(2)}
+                </span>
+              </div>
+              <Progress
+                value={Math.min(
+                  100,
+                  (budget.spentToday / Math.max(0.01, budget.dailyLimitUsd)) * 100
+                )}
+                tone={
+                  budget.blocked
+                    ? 'danger'
+                    : budget.spentToday / budget.dailyLimitUsd > 0.7
+                      ? 'warning'
+                      : 'accent'
+                }
+              />
+            </div>
+          )}
+
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground text-pretty">
+            The daily cap refuses to start a turn once it is reached. The per-turn cap stops a turn
+            from continuing — it cannot make one step cheaper, so a single turn can land a little
+            over it.
+          </p>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 export function ClaudeEngineDetails(): React.JSX.Element | null {
   const settings = useApp((s) => s.settings)
   const bootstrap = useApp((s) => s.bootstrap)
@@ -992,126 +1100,6 @@ export function ClaudeEngineDetails(): React.JSX.Element | null {
             </p>
           </section>
 
-          <Separator />
-
-          <section>
-            <SectionTitle>Usage limits</SectionTitle>
-
-            {budget?.onSubscription && settings.budget.mode === 'auto' && (
-              <p className="mb-2 rounded-md border border-success/25 bg-success/8 px-2.5 py-2 text-[11px] leading-relaxed text-success text-pretty">
-                Running on your Claude plan, so there is no per-token charge to cap. Spend caps stand
-                down automatically and the usage windows below show your real limits instead.
-              </p>
-            )}
-
-            <Row
-              label="Spend caps"
-              hint="Only relevant when the CLI bills metered API credits"
-            >
-              <NativeSelect
-                value={settings.budget.mode}
-                onChange={(mode) =>
-                  void updateSettings({
-                    budget: { ...settings.budget, mode: mode as 'auto' | 'always' | 'off' }
-                  })
-                }
-                options={[
-                  { value: 'auto', label: 'Only on API credits' },
-                  { value: 'always', label: 'Always' },
-                  { value: 'off', label: 'Never' }
-                ]}
-              />
-            </Row>
-
-            {settings.budget.mode !== 'off' && (
-              <>
-                <Row label="Daily cap">
-                  <NumberInput
-                    value={settings.budget.dailyLimitUsd}
-                    step={0.25}
-                    min={0.25}
-                    onChange={(dailyLimitUsd) =>
-                      void updateSettings({ budget: { ...settings.budget, dailyLimitUsd } })
-                    }
-                  />
-                </Row>
-                <Row label="Per-turn cap">
-                  <NumberInput
-                    value={settings.budget.perTurnLimitUsd}
-                    step={0.05}
-                    min={0.05}
-                    onChange={(perTurnLimitUsd) =>
-                      void updateSettings({ budget: { ...settings.budget, perTurnLimitUsd } })
-                    }
-                  />
-                </Row>
-                {budget?.enabled && (
-                  <div className="mt-1.5">
-                    <div className="mb-1 flex items-baseline justify-between text-[11px]">
-                      <span className="text-muted-foreground">Used today</span>
-                      <span className="tabular-nums text-foreground">
-                        {budget.spentToday.toFixed(2)} / {budget.dailyLimitUsd.toFixed(2)}
-                      </span>
-                    </div>
-                    <Progress
-                      value={Math.min(100, (budget.spentToday / Math.max(0.01, budget.dailyLimitUsd)) * 100)}
-                      tone={budget.blocked ? 'danger' : budget.spentToday / budget.dailyLimitUsd > 0.7 ? 'warning' : 'accent'}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-
-            {usage?.available && (
-              <div className="mt-3 flex flex-col gap-2.5 border-t border-border/60 pt-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Plan usage
-                </p>
-                {usage.session && <UsageRow label="Current session (5h)" bucket={usage.session} />}
-                {usage.week && <UsageRow label="This week" bucket={usage.week} />}
-                {usage.weekByModel
-                  .filter((entry) => entry.percent > 0)
-                  .map((entry) => (
-                    <UsageRow
-                      key={entry.model}
-                      label={`This week · ${entry.model}`}
-                      bucket={{ percent: entry.percent, resetsAt: null }}
-                    />
-                  ))}
-                {usage.caveat && (
-                  <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">
-                    {usage.caveat}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/*
-              Folded away, not deleted.
-
-              Both paragraphs are true and worth reading once — the per-turn cap cannot make a
-              step cheaper, and neither cap changes how the organisation is billed. But this
-              moved into the Engine tab, where the reason to visit is choosing an engine, and
-              two paragraphs of billing prose under a control most people never touch pushed
-              everything else down the page. `<details>` costs a click to read and nothing to
-              skip, which is the right trade for a footnote.
-            */}
-            <details className="group mt-2">
-              <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground">
-                <ChevronRight className="size-3 transition-transform duration-150 group-open:rotate-90" />
-                What the caps do, exactly
-              </summary>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-                The daily cap is the real guard: no turn starts once it is reached. The per-turn cap
-                is passed to the CLI, which stops a turn from continuing past it — it cannot make a
-                single step cheaper, so one turn can still land slightly over.
-              </p>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground text-pretty">
-                Neither changes how your organisation is billed. To stop credit spend outright, an
-                admin has to turn off extra usage in the Anthropic Console.
-              </p>
-            </details>
-          </section>
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { EngineState } from '@shared/engines'
 import type {
   DeepPartial,
   ActivityEntry,
@@ -46,6 +47,16 @@ interface StreamingMessage {
 interface AppState {
   ready: boolean
   bootstrap: BootstrapPayload | null
+  /**
+   * The selected engine, and whether it can run a turn.
+   *
+   * In the store rather than in one component because two surfaces need the same answer and one
+   * of them was getting it from the wrong place: the chat gated its composer on
+   * `bootstrap.agent.available`, which is `resolveClaudeBinary() !== null` — a fact about Claude
+   * standing in for a fact about the engine. With DeepSeek selected and working, the chat still
+   * said "The Claude CLI was not found" and refused to accept a message.
+   */
+  engine: EngineState | null
   settings: Settings | null
 
   graph: GraphSnapshot
@@ -112,6 +123,7 @@ interface AppState {
   answerQuestion: (id: string, answer: string) => Promise<void>
 
   setPanel: (panel: Panel) => void
+  setEngine: (engine: EngineState | null) => void
   openTool: (toolId: string) => void
   closeTool: () => void
   selectNode: (id: string | null) => void
@@ -248,6 +260,7 @@ function livePulses(
 export const useApp = create<AppState>((set, get) => ({
   ready: false,
   bootstrap: null,
+  engine: null,
   settings: null,
 
   graph: { nodes: [], edges: [], stamp: 0 },
@@ -385,6 +398,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setPanel: (panel) => set({ panel }),
+
+  setEngine: (engine) => set({ engine }),
 
   openTool: (toolId) => set({ openToolId: toolId }),
   closeTool: () => set({ openToolId: null }),

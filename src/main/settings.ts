@@ -12,10 +12,10 @@ export function defaultSettings(workspacePath: string): Settings {
     effort: 'medium',
     defaultCapability: 'curate',
     budget: {
-      // 'auto' enforces caps only when the CLI is billing metered API credits.
-      // On a subscription there is nothing per-token to cap, so caps would only
-      // get in the way.
-      mode: 'auto',
+      // Off. A spend cap that nobody asked for is a turn that stops for a reason the user has
+      // never heard of — and the mode that used to be here defaulted to on-when-metered while
+      // getting "metered" wrong.
+      mode: 'off',
       dailyLimitUsd: 5,
       perTurnLimitUsd: 1
     },
@@ -158,6 +158,23 @@ function merge<T>(base: T, patch: unknown, path = ''): T {
   return out as T
 }
 
+/**
+ * Read a legacy spend-cap mode as what it meant.
+ *
+ * `mode` used to have three values. `always` was a deliberate choice, so it becomes `on`;
+ * `auto` was the *default*, so nobody chose it and it becomes `off` — which is also what it
+ * effectively did for everyone on a plan. Anything else unrecognisable lands on `off`, because
+ * the failure that matters here is a cap nobody asked for stopping a turn.
+ *
+ * Done on read rather than as a migration because settings are a plain JSON file the user can
+ * edit: a one-shot rewrite would fix the file once and be wrong the next time it was touched.
+ */
+function normaliseBudget(settings: Settings): Settings {
+  const mode = settings.budget.mode as string
+  if (mode === 'on' || mode === 'off') return settings
+  return { ...settings, budget: { ...settings.budget, mode: mode === 'always' ? 'on' : 'off' } }
+}
+
 export class SettingsStore {
   private current: Settings
   private readonly file: string
@@ -169,7 +186,7 @@ export class SettingsStore {
     if (existsSync(file)) {
       try {
         const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
-        this.current = merge(this.current, raw)
+        this.current = normaliseBudget(merge(this.current, raw))
       } catch (err) {
         log.warn('settings file unreadable, falling back to defaults', err)
       }
@@ -190,7 +207,7 @@ export class SettingsStore {
    * callers to restate sibling keys they had no business touching.
    */
   update(patch: DeepPartial<Settings>): Settings {
-    this.current = merge(this.current, patch)
+    this.current = normaliseBudget(merge(this.current, patch))
     this.persist()
     return this.current
   }

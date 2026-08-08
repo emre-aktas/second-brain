@@ -745,6 +745,20 @@ async function main(): Promise<void> {
     // The settings an API provider has, which previously appeared nowhere at all.
     check('the key is shown as stored', /API key\s*stored/i.test(text), text.slice(0, 600))
     check('the address is shown', /api\.deepseek\.com/i.test(text), text.slice(0, 600))
+
+    /*
+     * The spend caps, reachable from a provider that actually charges you.
+     *
+     * They lived inside `ClaudeEngineDetails`, which the tab only draws when Claude is selected —
+     * so the one control with the word "spend" on it could not be reached from DeepSeek, and the
+     * pointer in Settings said it was in the Engine tab, where it was not.
+     */
+    check('the spend caps are reachable from a metered provider', /Spend caps/i.test(text), text.slice(0, 900))
+    check(
+      'and they say this engine charges per token',
+      /charges your own account per token/i.test(text),
+      text.slice(0, 900)
+    )
     check(
       'and the key can be replaced or removed without the wizard',
       (blocked.buttons ?? []).some((b) => /Replace/i.test(b)) &&

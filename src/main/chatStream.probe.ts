@@ -116,7 +116,14 @@ async function main(): Promise<void> {
     workspace: { root: '', vaultDir: '', integrationsDir: '', dbPath: '', trashDir: '' },
     settings: SETTINGS,
     stats: { notes: 0, edges: 0, tags: 0, suggestions: 0, lastIndexedAt: Date.now() },
-    agent: { available: true, binaryPath: 'x', version: '1', model: 'opus', auth: null },
+    /*
+     * No Claude CLI on this machine, deliberately.
+     *
+     * The chat used to gate its composer on exactly this flag — `resolveClaudeBinary() !== null` —
+     * so a user running DeepSeek was told "The Claude CLI was not found" and could not type. The
+     * engine state below is the answer it should have been reading.
+     */
+    agent: { available: false, binaryPath: null, version: null, model: 'opus', auth: null },
     session: SESSION,
     secretsEncrypted: false,
     webhookBaseUrl: '',
@@ -126,6 +133,33 @@ async function main(): Promise<void> {
   ipcMain.handle('chat:messages', () => [])
   ipcMain.handle('chat:sessions', () => [SESSION])
   ipcMain.handle('graph:get', () => ({ nodes: [], edges: [], stamp: 1 }))
+
+  /** DeepSeek, configured and ready — `blocked: null` is the whole assertion. */
+  const readyEngine = {
+    providers: [],
+    selectedProviderId: 'deepseek',
+    capabilities: {
+      engine: 'openai-compatible',
+      providerId: 'deepseek',
+      model: 'deepseek-v4-flash',
+      builtInTools: false,
+      serverSideSessions: false,
+      streamsText: true,
+      reasoning: true,
+      toolCalling: true,
+      accountConnectors: false,
+      sandboxed: false,
+      toolPrefix: '',
+      deferredTools: false,
+      metered: true,
+      usageWindows: false
+    },
+    effort: '',
+    blocked: null,
+    notes: []
+  }
+  ipcMain.removeHandler('engine:state')
+  ipcMain.handle('engine:state', () => readyEngine)
 
   await app.whenReady()
   log('app ready')
@@ -289,6 +323,80 @@ async function main(): Promise<void> {
   const shot = await win.webContents.capturePage()
   writeFileSync(join(OUT, 'chat-stream.png'), shot.toPNG())
   log(`  wrote ${join(OUT, 'chat-stream.png')}`)
+
+  /* ------------------------------------------- a working engine that is not Claude */
+
+  {
+    const shot = (await win.webContents.executeJavaScript(
+      `(() => {
+        const textarea = document.querySelector('textarea')
+        return {
+          text: document.body.innerText,
+          disabled: textarea ? textarea.disabled : null,
+          placeholder: textarea ? textarea.getAttribute('placeholder') : null
+        }
+      })()`
+    )) as { text: string; disabled: boolean | null; placeholder: string | null }
+
+    /*
+     * With DeepSeek selected and ready, nothing about Claude belongs on this screen.
+     *
+     * The chat gated its composer on `bootstrap.agent.available`, which is
+     * `resolveClaudeBinary() !== null` — a fact about one engine deciding for all of them. So the
+     * banner named the wrong engine in every clause, and the composer refused to accept a message
+     * from someone whose engine was configured, verified and working.
+     */
+    check(
+      'no Claude install warning when another engine is ready',
+      !/Claude CLI was not found/i.test(shot.text),
+      shot.text.slice(0, 300)
+    )
+    check('and the composer accepts typing', shot.disabled === false, shot)
+    check(
+      'with its normal placeholder rather than an install instruction',
+      !/Install Claude Code/i.test(shot.placeholder ?? ''),
+      shot.placeholder
+    )
+  }
+
+  /* ------------------------------------------------- and an engine that is not ready */
+
+  {
+    ipcMain.removeHandler('engine:state')
+    ipcMain.handle('engine:state', () => ({
+      ...readyEngine,
+      blocked: 'Choose a model for DeepSeek first.'
+    }))
+    // Broadcast the way a real switch arrives, which is what the panel listens for.
+    broadcaster.send('settings:changed', SETTINGS)
+    await settle(800)
+
+    const shot = (await win.webContents.executeJavaScript(
+      `(() => {
+        const textarea = document.querySelector('textarea')
+        return {
+          text: document.body.innerText,
+          disabled: textarea ? textarea.disabled : null,
+          buttons: Array.from(document.querySelectorAll('button')).map((el) => el.innerText.trim()).filter(Boolean)
+        }
+      })()`
+    )) as { text: string; disabled: boolean | null; buttons: string[] }
+
+    // The engine's own sentence, not a paragraph about a different engine.
+    check(
+      'a blocked engine says what is actually wrong',
+      /Choose a model for DeepSeek first/i.test(shot.text),
+      shot.text.slice(0, 400)
+    )
+    check('and stops the composer', shot.disabled === true, shot)
+    // Naming a problem with no route to it is the thing this change is about.
+    check(
+      'and offers the way to fix it',
+      shot.buttons.some((label) => /Open the Engine tab/i.test(label)),
+      shot.buttons
+    )
+  }
+
 
   log(failures === 0 ? '\nall chat stream checks passed\n' : `\n${failures} check(s) failed\n`)
   app.exit(failures === 0 ? 0 : 1)

@@ -29,7 +29,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { toast } from '@/components/ui/sonner'
-import { ClaudeEngineDetails } from '@/components/panels/SidePanels'
+import { ClaudeEngineDetails, SpendCaps } from '@/components/panels/SidePanels'
 
 /**
  * Choosing what runs the agent.
@@ -1059,6 +1059,14 @@ function Overview({
         </div>
       )}
 
+      {/*
+        For every engine, not just the one whose card it used to live inside.
+        
+        `ClaudeEngineDetails` held the spend caps, and the Engine tab only draws that when Claude
+        is selected — so the caps were unreachable from every provider that actually bills you.
+      */}
+      {selected && <SpendCaps />}
+
       {selected?.provider.id === 'claude-cli' && <ClaudeEngineDetails />}
 
       {/*
@@ -1214,6 +1222,22 @@ function ApiEngineDetails({
           onAction={() => onEdit('endpoint')}
         />
       </div>
+
+      {/*
+        Where the spend caps are, said on the card that just told you it bills per token.
+        
+        `capabilityNotes` already says the caps are enforced for a metered provider, and that is
+        the sentence someone reads immediately before wondering where the switch is. It is two
+        panels away, so it gets named.
+      */}
+      {entry.provider.metered && (
+        <p className="mt-2.5 border-t border-border/60 pt-2 text-[11px] leading-snug text-muted-foreground text-pretty">
+          This provider charges your own account per token. The daily and per-turn caps are in
+          Settings under <span className="text-foreground/80">Usage limits</span> — on
+          &ldquo;when billed per token&rdquo; they apply automatically while a metered engine is
+          selected.
+        </p>
+      )}
 
       {entry.provider.local && (
         <p className="mt-2.5 border-t border-border/60 pt-2 text-[11px] leading-snug text-muted-foreground text-pretty">

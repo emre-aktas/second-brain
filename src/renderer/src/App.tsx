@@ -114,12 +114,13 @@ function Shell(): React.JSX.Element {
    * footer would keep naming the previous provider until the window was reloaded, which is the
    * one moment the user is looking for confirmation that the switch took.
    */
-  const [engine, setEngine] = useState<EngineState | null>(null)
+  const engine = useApp((s) => s.engine)
+  const setEngine = useApp((s) => s.setEngine)
   useEffect(() => {
     const read = (): void => void api.engineState().then(setEngine).catch(() => undefined)
     read()
     return onEvent('settings:changed', read)
-  }, [])
+  }, [setEngine])
   const selectedNodeId = useApp((s) => s.selectedNodeId)
   const selectNode = useApp((s) => s.selectNode)
   const clearFocus = useApp((s) => s.clearFocus)
