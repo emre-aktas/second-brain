@@ -1,6 +1,6 @@
 {
   "name": "second-brain",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A physics-driven personal second brain with an embedded Claude agent",
   "author": {
     "name": "Emre Aktaş",
