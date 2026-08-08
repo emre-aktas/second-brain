@@ -47,6 +47,10 @@ async function main(): Promise<void> {
       BRAIN_URL: host.url,
       BRAIN_TOKEN: host.token,
       BRAIN_SESSION_ID: 'bridge-probe',
+      // The capability tier, as the manager passes it. Claude also gets `--disallowedTools`, but
+      // Codex has no equivalent flag — so without this gate a read-only Codex chat had a
+      // read-only sandbox and full write access to the vault through the brain tools.
+      BRAIN_DENY: 'always_fails',
       BRAIN_BRIDGE_DEBUG: '1'
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -117,7 +121,7 @@ async function main(): Promise<void> {
   const call = (await waitFor(3)) as { content?: { type: string; text: string }[]; isError?: boolean }
 
   write({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'always_fails', arguments: {} } })
-  const errCall = (await waitFor(4)) as { content?: { type: string; text: string }[]; isError?: boolean }
+  const denied = (await waitFor(4)) as { content?: { type: string; text: string }[]; isError?: boolean }
 
   write({ jsonrpc: '2.0', id: 5, method: 'ping' })
   const ping = await waitFor(5)
@@ -128,12 +132,14 @@ async function main(): Promise<void> {
   const checks: [string, boolean][] = [
     ['initialize echoes the protocol version', init?.protocolVersion === '2025-06-18'],
     ['initialize advertises serverInfo', !!init?.serverInfo],
-    ['tools/list returns both tools', (tools?.tools?.length ?? 0) === 2],
+    ['tools/list withholds what the tier denies', (tools?.tools?.length ?? 0) === 1],
     ['tool names are unprefixed', tools?.tools?.some((t) => t.name === 'echo_probe') === true],
     ['tools/call round trips', call?.content?.[0]?.text === 'echo:hello-bridge'],
     ['successful call is not flagged as error', call?.isError === false],
-    ['throwing handler returns isError', errCall?.isError === true],
-    ['throwing handler explains itself', (errCall?.content?.[0]?.text ?? '').includes('intentional failure')],
+    // Refused as well as hidden: a model that learned the name elsewhere must not get through by
+    // asking for it directly.
+    ['a denied tool is refused when asked for by name', denied?.isError === true],
+    ['and told why, so it can say what it would have changed', (denied?.content?.[0]?.text ?? '').includes('read-only')],
     ['ping answered', !!ping],
     ['unknown method returns -32601', (unknown as { error?: { code: number } })?.error?.code === -32601],
     ['notifications produced no response frames', notificationsSeen === 0]

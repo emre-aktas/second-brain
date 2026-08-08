@@ -130,3 +130,19 @@ function normalise(raw: Record<string, unknown>): ModelInfo {
 export function forgetModels(baseUrl: string): void {
   cache.delete(baseUrl.replace(/\/+$/, ''))
 }
+
+/**
+ * One model out of whatever has already been fetched, synchronously.
+ *
+ * Building an engine is synchronous — the manager is mid-turn by the time it happens — so the
+ * catalogue can only be *consulted*, never awaited, here. That is why this reads the cache and
+ * answers null rather than fetching: a turn must not wait on a provider's model list, and the
+ * two things this answer feeds both degrade gracefully without it. Capabilities fall back to
+ * optimistic, which is the existing behaviour, and cost falls back to unknown.
+ *
+ * The cache is warm in practice, because choosing a model in the panel is what fills it.
+ */
+export function cachedModel(baseUrl: string, id: string): ModelInfo | null {
+  const hit = cache.get(baseUrl.replace(/\/+$/, ''))
+  return hit?.models.find((model) => model.id === id) ?? null
+}

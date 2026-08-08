@@ -48,6 +48,29 @@ function explainFailure(message: string): string {
   return `Codex is not signed in. Run \`codex login\` in a terminal, then try again. (${message})`
 }
 
+/**
+ * A value for `-c`, in a form Codex will hand back unchanged.
+ *
+ * `-c` values are parsed as TOML, and a Windows path in a TOML *basic* string does not survive
+ * the trip: `codex mcp get` reads back `C:\tmp\brain-mcp.mjs` as `C:<TAB>mp<BS>rain-mcp.mjs`,
+ * because the escapes are processed twice. `JSON.stringify` produces exactly that basic string,
+ * so every path this app injected — the Electron binary, the bridge script, an integration's
+ * command — arrived mangled, the brain MCP server could not start, and Codex ran with no access
+ * to the vault at all. It answered like a stock assistant because that is what it was.
+ *
+ * A TOML *literal* string does no escape processing in either pass, so it round-trips exactly.
+ * Its one limitation is that it cannot contain a single quote — there is no escape for one — so
+ * a value that does falls back to a basic string escaped twice, which the same experiment shows
+ * arrives intact. `codex.probe.ts` round-trips a path through the real CLI rather than trusting
+ * either theory.
+ */
+function tomlValue(value: string): string {
+  // Control characters have no literal-string representation either; a newline in a path or an
+  // env value is pathological, but it must not silently produce a broken config.
+  if (!value.includes("'") && !/[\u0000-\u001f]/.test(value)) return `'${value}'`
+  return JSON.stringify(JSON.stringify(value).slice(1, -1))
+}
+
 export class CodexEngine implements AgentEngine {
   private child: ChildProcessWithoutNullStreams | null = null
   private buffer = ''
@@ -57,6 +80,8 @@ export class CodexEngine implements AgentEngine {
   private startedValue = false
   /** Ids of tool-ish items already announced, so `completed` can close the right one. */
   private openItems = new Set<string>()
+  /** The app's instructions have gone in. Once per instance — see `promptFor`. */
+  private sentInstructions = false
 
   constructor(
     private readonly binary: string,
@@ -99,23 +124,67 @@ export class CodexEngine implements AgentEngine {
   }
 
   /**
-   * How much the sandboxed shell is allowed to do.
+   * What still bounds a Codex turn, now that the sandbox does not.
    *
-   * Mapped from the app's own capability tiers, and deliberately never
-   * `--dangerously-bypass-approvals-and-sandbox`. The vault is the working directory, so
-   * `workspace-write` is exactly the reach the agent is supposed to have: it can edit notes and
-   * run commands inside the sandbox, and cannot touch the rest of the disk. Bypassing would
-   * hand an unattended scheduled run full access to the machine to gain nothing.
+   * Kept as a named thing rather than deleted, because the tier is not meaningless here — it is
+   * enforced, just somewhere else. `BRAIN_DENY` runs in our own MCP bridge, so `read-only`
+   * genuinely withholds every tool that writes to the vault. What it cannot reach is Codex's own
+   * shell and file tools, which the bypass flag frees along with the approval prompt. Reported
+   * rather than implied: this is what the log line says, and what the Engine tab says.
    */
-  private sandboxFor(capability: AgentCapability): string {
-    return capability === 'read-only' ? 'read-only' : 'workspace-write'
+  private reachFor(capability: AgentCapability): string {
+    return capability === 'read-only' ? 'brain tools read-only, shell unsandboxed' : 'unsandboxed'
   }
 
-  private buildArgs(prompt: string): string[] {
-    const args = ['exec', '--json', '--skip-git-repo-check']
+  private buildArgs(): string[] {
+    const args = ['exec']
 
-    // Resuming keeps the thread; the first turn creates one.
+    /*
+     * `resume` is a subcommand, and it does not take the flags `exec` does.
+     *
+     * This is the whole of the second-turn bug, and it was invisible from inside the app: a
+     * first turn worked, and every turn after it died instantly with `error: unexpected
+     * argument '-s' found` and a clap usage dump — so a Codex conversation was exactly one
+     * message long, and the message the user got back was the CLI's help text. `codex exec
+     * resume --help` lists neither `-s/--sandbox` nor `-C/--cd`; both belong to `exec` alone.
+     *
+     * `-c` *is* accepted by both, and `sandbox_mode` is the config key behind `-s`, so the
+     * sandbox is set that way on every invocation rather than two ways on two paths. The
+     * working directory needs no flag at all: the spawn below already runs in it.
+     *
+     * `--json` and `--skip-git-repo-check` are declared on both, and go after the subcommand so
+     * that whether the parent's copies propagate is not something this depends on.
+     */
     if (this.threadId) args.push('resume', this.threadId)
+    args.push('--json', '--skip-git-repo-check')
+
+    /*
+     * The flag whose name is a warning, and the only thing that makes Codex work here at all.
+     *
+     * `codex exec` cancels *every* MCP tool call. Not ours, not sometimes: the server starts, the
+     * tools are listed, the model asks for one, and the call comes back
+     * `{"error":{"message":"user cancelled MCP tool call"}}` without ever reaching the bridge.
+     * Nobody cancelled anything — exec is non-interactive, an MCP call raises an approval
+     * request, there is nobody to answer it, and the denial is reported as a cancellation. It is
+     * a known upstream limitation (openai/codex#16685, #24135) and there is no config key for
+     * it: `approval_policy` in all five of its values, project `trust_level`, and every
+     * `mcp_servers.*` and `tools.*` field this version accepts were each tried against the real
+     * CLI and each still cancelled.
+     *
+     * So the choice is this flag or an engine that cannot read a single note, and the second is
+     * not a choice. What it costs is real and is not hidden: it removes the sandbox as well as
+     * the prompt, and `-c sandbox_mode` cannot put it back — a turn run with both wrote a file
+     * outside its working directory, which is how that was established rather than assumed.
+     * `EngineCapabilities.sandboxed` is false for this engine because of it, the Engine tab says
+     * so in the capability grid and again in words on the Codex card, and `capabilityNotes`
+     * repeats it. The app's own tier gating still holds, because `BRAIN_DENY` is enforced in our
+     * bridge rather than by Codex — but that bounds the *brain tools*, not Codex's own shell.
+     *
+     * `sandbox_mode` is deliberately no longer sent. It was ignored under this flag, and a
+     * parameter that looks like it is bounding something while doing nothing is worse than an
+     * absent one.
+     */
+    args.push('--dangerously-bypass-approvals-and-sandbox')
 
     /*
      * Only when the user actually chose one.
@@ -126,8 +195,6 @@ export class CodexEngine implements AgentEngine {
      * already set it up. Passing a stale `settings.model` instead is what sent `opus` here.
      */
     if (this.capabilitiesValue.model) args.push('-m', this.capabilitiesValue.model)
-    args.push('-s', this.sandboxFor(this.options.capability))
-    args.push('-C', this.options.cwd)
 
     /*
      * The brain's tools, injected per invocation as TOML.
@@ -141,14 +208,26 @@ export class CodexEngine implements AgentEngine {
     >
     for (const [name, server] of Object.entries(servers)) {
       if (!server.command) continue
-      const parts = [`command=${JSON.stringify(server.command)}`]
-      if (server.args?.length) parts.push(`args=[${server.args.map((a) => JSON.stringify(a)).join(',')}]`)
+      const parts = [`command=${tomlValue(server.command)}`]
+      if (server.args?.length) parts.push(`args=[${server.args.map(tomlValue).join(',')}]`)
       if (server.env && Object.keys(server.env).length > 0) {
         const env = Object.entries(server.env)
-          .map(([key, value]) => `${JSON.stringify(key)}=${JSON.stringify(value)}`)
+          .map(([key, value]) => `${tomlValue(key)}=${tomlValue(value)}`)
           .join(',')
         parts.push(`env={${env}}`)
       }
+      /*
+       * Room to start, because it is not starting alone.
+       *
+       * Codex merges the servers we inject with the ones in the user's own `config.toml`, and a
+       * real machine has several — this one launches pencil, godot, node_repl, figma and notion
+       * alongside the brain. A server that misses the default window is dropped silently, and a
+       * dropped brain server is indistinguishable from the tools being withheld. The user's own
+       * heavy entries already carry `startup_timeout_sec = 120` for the same reason; this is the
+       * cheap end of that insurance, and the bridge is a plain node script that normally starts
+       * in well under a second.
+       */
+      parts.push('startup_timeout_sec=30')
       args.push('-c', `mcp_servers.${name}={${parts.join(',')}}`)
     }
 
@@ -160,11 +239,51 @@ export class CodexEngine implements AgentEngine {
      * quietly overriding it with a tier borrowed from a different provider.
      */
     if (this.options.effort) {
-      args.push('-c', `model_reasoning_effort=${JSON.stringify(this.options.effort)}`)
+      args.push('-c', `model_reasoning_effort=${tomlValue(this.options.effort)}`)
     }
 
-    args.push(prompt)
+    /*
+     * The prompt goes in on stdin, not in argv.
+     *
+     * `codex exec -` reads the prompt from stdin, which is the documented way and here the only
+     * possible one: the system prompt alone is around 30,000 characters and Windows caps an
+     * entire command line at 32,767 — with the MCP config, the model, the sandbox and the user's
+     * own message also on that line. As an argument it would work in testing and fail on a real
+     * vault, which is the worst way for a limit to be discovered.
+     *
+     * This does not weaken the rule that stdin must be closed. It was never "leave stdin alone";
+     * it was "an open, silent stdin is read as a prompt still arriving". Writing the prompt and
+     * then ending the stream says the opposite, unambiguously.
+     */
+    args.push('-')
     return args
+  }
+
+  /**
+   * What actually goes to Codex: the app's instructions, then the turn.
+   *
+   * Codex was never given `appendSystemPrompt` at all. The manager built it — who the agent is,
+   * what the vault contains, which tools exist, what this capability tier forbids — and this
+   * engine dropped it on the floor, so Codex answered "who am I?" like a stock assistant while
+   * Claude answered it from ninety-six notes. That was not a difference between the models.
+   *
+   * There is no `--append-system-prompt` here and no config key for one (`instructions`,
+   * `user_instructions`, `base_instructions` and `experimental_instructions_file` are all
+   * rejected by this version), so the instructions ride in the prompt of the first turn an engine
+   * instance runs. Once per instance rather than once per thread: a capability change builds a
+   * new engine on the same thread, and a tier the agent has not been told about is the one that
+   * matters most.
+   */
+  private promptFor(text: string): string {
+    if (this.sentInstructions || !this.options.appendSystemPrompt) return text
+    this.sentInstructions = true
+    return [
+      '<instructions>',
+      this.options.appendSystemPrompt,
+      '</instructions>',
+      '',
+      text
+    ].join('\n')
   }
 
   send(text: string, images: { mediaType: string; dataBase64: string }[] = []): void {
@@ -178,8 +297,8 @@ export class CodexEngine implements AgentEngine {
     this.buffer = ''
     this.openItems.clear()
 
-    const args = this.buildArgs(text)
-    log.info(`codex exec (${this.capabilitiesValue.model}, ${this.sandboxFor(this.options.capability)})`)
+    const args = this.buildArgs()
+    log.info(`codex exec (${this.capabilitiesValue.model || 'your codex default'}, ${this.reachFor(this.options.capability)})`)
 
     const child = spawn(this.binary, args, {
       cwd: this.options.cwd,
@@ -191,15 +310,15 @@ export class CodexEngine implements AgentEngine {
     this.child = child
 
     /*
-     * Close stdin at once, or the turn never starts.
+     * The prompt, then the end of the stream — and the end is not optional.
      *
-     * `codex exec` takes its prompt from stdin when stdin is a pipe, and the default stdio
-     * for a spawn is a pipe — so an open, silent stdin is read as "the prompt is still
-     * coming" and it waits. The observed symptom is exact: it prints "Reading additional
-     * input from stdin..." and the turn sits there, which from the app is indistinguishable
-     * from a hang. Ending the stream is what makes the prompt argument the whole prompt.
+     * `codex exec` reads its prompt from stdin, and a stdin left open is read as "the prompt is
+     * still coming": it prints "Reading additional input from stdin..." and waits, which from
+     * the app is indistinguishable from a hang. Writing the whole prompt and then ending says
+     * the opposite unambiguously, and it is what lets a 30,000-character system prompt through
+     * a command line Windows caps at 32,767.
      */
-    child.stdin.end()
+    child.stdin.end(this.promptFor(text))
 
     const started = Date.now()
     let lastText = ''
@@ -377,15 +496,35 @@ export class CodexEngine implements AgentEngine {
           exit_code: item['exit_code']
         }, String(item['aggregated_output'] ?? ''), item['exit_code'] !== 0 && completed)
 
-      case 'mcp_tool_call':
+      case 'mcp_tool_call': {
+        /*
+         * The reason a tool call failed, kept rather than thrown away.
+         *
+         * A failed call carries `result: null` and `error: {message}`, and this used to read
+         * only `result` — so `JSON.stringify(null ?? '')` produced the string `""` and the
+         * transcript showed eight red rows whose entire content was two quote marks. The one
+         * fact that would have explained all of them, "user cancelled MCP tool call", was on
+         * the frame the whole time and never left this function.
+         */
+        const failure = item['error'] as { message?: string } | null | undefined
+        const raw = item['result']
+        const text = failure?.message
+          ? failure.message
+          : typeof raw === 'string'
+            ? raw
+            : raw == null
+              ? ''
+              : JSON.stringify(raw)
+
         return this.toolItem(
           itemId,
           completed,
           `${String(item['server'] ?? 'mcp')}.${String(item['tool'] ?? '')}`,
           (item['arguments'] as Record<string, unknown>) ?? {},
-          typeof item['result'] === 'string' ? item['result'] : JSON.stringify(item['result'] ?? ''),
-          Boolean(item['error'])
+          text,
+          Boolean(failure)
         )
+      }
 
       case 'file_change':
         return this.toolItem(

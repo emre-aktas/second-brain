@@ -1,6 +1,7 @@
 import type { TurnFollowups,
   BrainNode,
   EdgeKind,
+  EnginePrefs,
   IntegrationManifest,
   IntegrationSummary,
   NodeKind,
@@ -47,6 +48,36 @@ export interface IntegrationBridge {
   deleteSecret(ref: string): void
   setSecretExpiry(ref: string, expiresAt: number | null): void
   remove(integrationId: string): void
+}
+
+/**
+ * A per-engine preference from the agent's `model` / `effort` arguments.
+ *
+ * The agent asks for "a fast model for this tool" and a model name belongs to exactly one
+ * provider, so the choice is filed under whichever engine is running rather than in a single
+ * field that only Claude could ever honour. An empty string clears that engine's entry — which
+ * is the caller saying "back to the app's setting" — and is deliberately different from omitting
+ * the argument, which leaves everything alone.
+ */
+function enginePrefsFrom(
+  args: Record<string, unknown>,
+  providerId: string,
+  existing: EnginePrefs = {}
+): EnginePrefs {
+  const entry: { model?: string; effort?: string } = { ...(existing[providerId] ?? {}) }
+
+  if (args['model'] !== undefined) {
+    const model = str(args, 'model')
+    if (model) entry.model = model
+    else delete entry.model
+  }
+  if (args['effort'] !== undefined) {
+    const effort = str(args, 'effort')
+    if (effort) entry.effort = effort
+    else delete entry.effort
+  }
+
+  return Object.keys(entry).length > 0 ? { [providerId]: entry } : {}
 }
 
 export interface ToolDeps {
@@ -1489,8 +1520,10 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
           actions,
           layout,
           source,
-          model: str(args, 'model') ?? null,
-          effort: (str(args, 'effort') as SavedTool['effort']) ?? null,
+          // Scoped to the engine that is running, because a model name belongs to one provider.
+          // The agent is asking for "a fast model for this tool" and the fast model on Codex is
+          // not the fast model on DeepSeek — so the choice is stored where it means something.
+          enginePrefs: enginePrefsFrom(args, deps.core.settings.engine.providerId),
           windowWidth: num(args, 'windowWidth') ?? null,
           windowHeight: num(args, 'windowHeight') ?? null,
           icon: str(args, 'icon') ?? null,
@@ -1817,11 +1850,16 @@ export function buildBrainTools(deps: ToolDeps): RegisteredTool[] {
           actions,
           layout,
           source,
-          // An empty string is how the caller says "back to the app's setting",
-          // which is different from omitting the field entirely.
-          ...(args['model'] !== undefined ? { model: str(args, 'model') ?? null } : {}),
-          ...(args['effort'] !== undefined
-            ? { effort: (str(args, 'effort') as SavedTool['effort']) ?? null }
+          // An empty string is how the caller says "back to the app's setting", which is
+          // different from omitting the field entirely — so an update that mentions neither
+          // leaves whatever is stored for every engine alone.
+          ...(args['model'] !== undefined || args['effort'] !== undefined
+            ? {
+                enginePrefs: {
+                  ...tool.enginePrefs,
+                  ...enginePrefsFrom(args, deps.core.settings.engine.providerId, tool.enginePrefs)
+                }
+              }
             : {}),
           hotkey,
           openInWindow:

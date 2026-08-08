@@ -49,6 +49,31 @@ export type ReasoningDialect =
   /** The model has no reasoning control; sending one is noise. */
   | 'none'
 
+/**
+ * How a provider has to be *asked* for token counts on a streamed answer.
+ *
+ * Every one of them reports usage on a non-streamed call and none of them reports it on a
+ * streamed one unless told to, which is the whole reason this exists: the turn meter read zero
+ * against every real provider while reading correctly against a fake one that volunteered the
+ * numbers. And zero is not a visible failure — it looks like a turn that was simply cheap.
+ *
+ * Two spellings, because OpenAI put the flag in `stream_options` and OpenRouter put it in a
+ * top-level `usage` object. Sending the wrong one is not an error anywhere; it is just ignored.
+ */
+export type UsageDialect = 'stream_options' | 'openrouter' | 'none'
+
+/**
+ * Which field caps the answer's length.
+ *
+ * `max_tokens` was the field for years and is now *rejected outright* by OpenAI's current
+ * models — "Unsupported parameter: 'max_tokens' is not supported with this model. Use
+ * 'max_completion_tokens' instead" — so the one parameter meant to protect the user's spend was
+ * what made every OpenAI turn fail before it started. Most other providers still take the old
+ * name and some take neither, which is why this is declared per provider and why `request`
+ * drops it and retries when a provider complains about it by name.
+ */
+export type MaxTokensField = 'max_tokens' | 'max_completion_tokens'
+
 export interface EngineProvider {
   id: string
   label: string
@@ -63,6 +88,18 @@ export interface EngineProvider {
   keyUrl?: string
   needsKey: boolean
   reasoning: ReasoningDialect
+  /** How to ask for token counts while streaming. Absent means `stream_options`. */
+  usage?: UsageDialect
+  /** Which field caps the answer. Absent means `max_tokens`. */
+  maxTokens?: MaxTokensField
+  /**
+   * A local server, so "is it installed" is "is it answering".
+   *
+   * The panel reported every API provider as installed, which for a model running on this
+   * machine is a claim about a process that may not be running — and the only symptom was a
+   * model list that came back empty with no clue as to why.
+   */
+  local?: boolean
   /**
    * Extra headers the provider wants.
    *
@@ -117,6 +154,7 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     keyUrl: 'https://openrouter.ai/keys',
     needsKey: true,
     reasoning: 'openrouter',
+    usage: 'openrouter',
     headers: {
       'HTTP-Referer': 'https://github.com/emre-aktas/second-brain',
       'X-Title': 'Second Brain'
@@ -145,6 +183,10 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     keyUrl: 'https://platform.openai.com/api-keys',
     needsKey: true,
     reasoning: 'reasoning_effort',
+    // Its current models reject `max_tokens` outright. This one line is the difference between
+    // the OpenAI provider working and every turn on it failing with a 400 about a parameter the
+    // user never chose to send.
+    maxTokens: 'max_completion_tokens',
     metered: true
   },
   {
@@ -157,6 +199,7 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     keyUrl: 'https://console.groq.com/keys',
     needsKey: true,
     reasoning: 'reasoning_effort',
+    maxTokens: 'max_completion_tokens',
     metered: true
   },
   {
@@ -181,6 +224,7 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     secretRef: '',
     needsKey: false,
     reasoning: 'none',
+    local: true,
     metered: false
   },
   {
@@ -192,6 +236,7 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     secretRef: '',
     needsKey: false,
     reasoning: 'none',
+    local: true,
     metered: false
   },
   {
@@ -239,6 +284,37 @@ export interface EngineCapabilities {
   toolCalling: boolean
   /** The user's own MCP connectors (Gmail, Slack…) are reachable. CLI engines only. */
   accountConnectors: boolean
+  /**
+   * The engine's own shell and file tools are confined to the workspace.
+   *
+   * False for Codex, and not by choice: `codex exec` cancels every MCP tool call unless it is
+   * launched with `--dangerously-bypass-approvals-and-sandbox`, which removes the sandbox along
+   * with the approval prompt, and `-c sandbox_mode` cannot put it back. So the honest choice was
+   * an engine that cannot read a note or an engine that is not confined — and the second, said
+   * out loud, beats the first said quietly.
+   */
+  sandboxed: boolean
+  /**
+   * What the brain's tools are *called* in front of this engine.
+   *
+   * `mcp__brain__` for the Claude CLI, which namespaces MCP tools that way, and empty for the
+   * other two: Codex calls them by their bare names and an API engine is handed the bare names
+   * by us. The prompt hardcoded the Claude spelling and told every engine that "everything you
+   * do runs through the mcp__brain__* tools" — a sentence that, on Codex, names a set of tools
+   * it cannot see. It still found `search_notes`, because a search tool is recognisable from its
+   * description alone; what it did not do was the thing the prompt has to *push* it into, like
+   * answering through `render_ui` instead of prose. An instruction to call a tool that is not in
+   * the list is an instruction the model has every reason to skip.
+   */
+  toolPrefix: string
+  /**
+   * Tools can arrive on demand rather than all at once, and there is a way to ask for them.
+   *
+   * Claude Code only. The prompt told every engine that a missing tool could be loaded with a
+   * `ToolSearch` call — a mechanism the other two do not have — which is worse than useless: it
+   * implies the tool list on screen may be incomplete and offers a remedy that does nothing.
+   */
+  deferredTools: boolean
   /** Real money per token, so the budget caps apply and the footer shows spend. */
   metered: boolean
   /** Plan usage windows can be read. `claude -p /usage` only. */
@@ -262,6 +338,13 @@ export function capabilityNotes(capabilities: EngineCapabilities): string[] {
   if (!capabilities.builtInTools) {
     notes.push(
       'No file or shell access: the agent works through the vault tools only, and cannot run commands or edit files outside your notes.'
+    )
+  }
+  if (capabilities.builtInTools && !capabilities.sandboxed) {
+    // Said first among the shell-related notes, because it is the one that is a decision rather
+    // than a difference: this engine can reach the whole machine while a turn is running.
+    notes.push(
+      'Not sandboxed: this engine can run commands and edit files anywhere on this computer, not just in your vault. Its CLI cancels every tool call unless the sandbox is turned off, so that is the trade it comes with.'
     )
   }
   if (!capabilities.accountConnectors) {
@@ -325,6 +408,47 @@ export function reasoningPatch(
     case 'none':
       return {}
   }
+}
+
+/**
+ * Ask for token counts on a streamed answer, in the provider's spelling.
+ *
+ * A patch like `reasoningPatch`, and for the same reason: two wire formats for one idea, neither
+ * of which errors when it is the wrong one. Nothing here is optional in practice — without it a
+ * streamed turn reports no usage at all, and the turn meter, the daily spend total and the
+ * per-turn cost readout are all downstream of numbers that never arrive.
+ */
+export function usagePatch(dialect: UsageDialect | undefined): Record<string, unknown> {
+  switch (dialect ?? 'stream_options') {
+    case 'stream_options':
+      return { stream_options: { include_usage: true } }
+    case 'openrouter':
+      return { usage: { include: true } }
+    case 'none':
+      return {}
+  }
+}
+
+/**
+ * What a turn cost, from its token counts and the model's published prices.
+ *
+ * The chat-completions response does not price the call — only OpenRouter will, and only if
+ * asked — so this is the app's own arithmetic against the catalogue. It matters more than it
+ * looks: `costUsd` is what the daily spend cap counts, so while this returned zero the panel's
+ * promise that "the app's spend caps are enforced while it is selected" was false for every
+ * metered provider. Null when the provider publishes no price, which is honest — a cap cannot
+ * be enforced against a number nobody has.
+ */
+export function costOf(
+  usage: { inputTokens: number; outputTokens: number },
+  prices: { promptPrice: number | null; completionPrice: number | null }
+): number | null {
+  if (prices.promptPrice === null && prices.completionPrice === null) return null
+  // Prices are per million tokens, which is how every provider quotes them and how the picker
+  // shows them.
+  const input = ((prices.promptPrice ?? 0) * usage.inputTokens) / 1_000_000
+  const output = ((prices.completionPrice ?? 0) * usage.outputTokens) / 1_000_000
+  return input + output
 }
 
 /** A thinking budget in tokens, for the dialects that want a number rather than a word. */

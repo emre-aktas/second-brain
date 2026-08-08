@@ -50,6 +50,18 @@ export interface EngineOptions {
   cwd: string
   model: string
   capability: AgentCapability
+  /**
+   * The chat this engine is answering in, and not a convenience.
+   *
+   * Several brain tools are *about* a conversation rather than about the vault — `ask_user` puts
+   * a question in it, `render_ui` puts an interface in it, `suggest_followups` puts an offer
+   * under the reply — and every one of them reads the session id off the tool call. The CLI
+   * engines carry it in the MCP bridge's environment, so it was never an argument here; an API
+   * engine calls the tool host directly and had nowhere to get it, which meant all three tools
+   * silently did nothing on an API engine. A question with no session is filtered out of chat
+   * and the turn waits on it until the backstop.
+   */
+  sessionId: string
   appendSystemPrompt: string
   /** Full `--mcp-config` payload. Used by the CLI engines to reach the brain tools. */
   mcpConfig: Record<string, unknown>

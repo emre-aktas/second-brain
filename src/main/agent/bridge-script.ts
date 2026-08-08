@@ -21,6 +21,20 @@ const BRAIN_TOKEN = process.env.BRAIN_TOKEN
 const BRAIN_SESSION_ID = process.env.BRAIN_SESSION_ID || null
 const BRAIN_LOG = process.env.BRAIN_BRIDGE_LOG || null
 
+// Tools this run's capability tier withholds, by name. The CLI engines are also given
+// --disallowedTools, but Codex has no equivalent flag — so without this gate, a read-only Codex
+// chat could create and trash notes while its sandbox was dutifully read-only. Enforced here
+// rather than only in the app because this is the one place every CLI engine's tool calls pass
+// through, and a rule applied at the surface holds only until the next caller.
+const BRAIN_DENY = new Set(
+  (process.env.BRAIN_DENY || '')
+    .split(',')
+    .map(function (name) {
+      return name.trim()
+    })
+    .filter(Boolean)
+)
+
 // stdout carries protocol frames only. Diagnostics go to stderr, and to a file
 // when BRAIN_BRIDGE_LOG is set — the host that spawns this process does not
 // always surface a child's stderr, so a log file is the reliable channel.
@@ -71,13 +85,17 @@ let cachedTools = null
 async function listTools() {
   if (cachedTools) return cachedTools
   const data = await rpc({ op: 'list' })
-  cachedTools = (data.tools || []).map(function (tool) {
-    return {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema
-    }
-  })
+  cachedTools = (data.tools || [])
+    .filter(function (tool) {
+      return !BRAIN_DENY.has(tool.name)
+    })
+    .map(function (tool) {
+      return {
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema
+      }
+    })
   return cachedTools
 }
 
@@ -124,6 +142,25 @@ async function handle(message) {
 
   if (method === 'tools/call') {
     const params = message.params || {}
+
+    // Refused as well as hidden. A model that saw the name in an earlier session, or read it in
+    // its instructions, must not get through by asking for it directly.
+    if (BRAIN_DENY.has(params.name)) {
+      debug('refused ' + String(params.name) + ': withheld at this capability')
+      respond(id, {
+        content: [
+          {
+            type: 'text',
+            text:
+              String(params.name) +
+              ' is not available in this conversation: it is read-only. Say what you would change instead.'
+          }
+        ],
+        isError: true
+      })
+      return
+    }
+
     try {
       const result = await rpc({ op: 'call', name: params.name, args: params.arguments || {} })
 

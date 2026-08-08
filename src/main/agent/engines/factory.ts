@@ -9,7 +9,7 @@ import { ClaudeProcess, resolveClaudeBinary } from '../claude'
 import type { AgentEngine, EngineEventSink, EngineOptions } from '../engine'
 import { ApiEngine } from './openai'
 import { CodexEngine } from './codex'
-import { fetchModels } from './catalogue'
+import { cachedModel, fetchModels } from './catalogue'
 import { codexModels, codexConfigDefaults } from './codexCatalogue'
 import { createLogger } from '../../logger'
 
@@ -116,6 +116,24 @@ export function capabilitiesFor(input: {
     toolCalling: input.info ? input.info.supportsTools : true,
     // The user's own MCP connectors are configured against the CLI's account, not ours.
     accountConnectors: cli,
+    /*
+     * Only Claude's CLI is confined.
+     *
+     * Codex has to be launched with `--dangerously-bypass-approvals-and-sandbox` or it cancels
+     * every MCP tool call, and that flag takes the sandbox with the prompt. An API engine has no
+     * shell to confine at all, so the question does not arise — `builtInTools` is what
+     * distinguishes those two cases, and `capabilityNotes` only raises this where both are true.
+     */
+    sandboxed: provider.engine === 'claude-cli',
+    /*
+     * Only Claude namespaces the brain's tools, and only Claude can fetch one on demand.
+     *
+     * Both were written into the prompt as facts about the world rather than about one engine,
+     * so Codex and every API model were told to call `mcp__brain__render_ui` — a name that does
+     * not exist for them — and to load a missing tool with `ToolSearch`, which they do not have.
+     */
+    toolPrefix: provider.engine === 'claude-cli' ? 'mcp__brain__' : '',
+    deferredTools: provider.engine === 'claude-cli',
     metered: provider.metered,
     // `claude -p /usage` is the only source for plan windows, and it only knows about Claude.
     usageWindows: provider.engine === 'claude-cli'
@@ -209,7 +227,22 @@ export function createEngine(
 ): AgentEngine {
   const providerId = deps.settings.engine.providerId
   const provider = providerById(providerId) ?? providerById('claude-cli')!
-  const capabilities = capabilitiesFor({ providerId: provider.id, model: deps.model })
+
+  /*
+   * What the provider said about this model, when the catalogue has already been read.
+   *
+   * Consulted, never fetched: this runs mid-turn and synchronously, so a turn must not wait on a
+   * model list. Two things depend on it and both degrade to the old behaviour without it — the
+   * capabilities fall back to optimistic, and the turn's cost falls back to unknown. It was
+   * omitted entirely before, which meant a model the catalogue had explicitly marked as unable to
+   * call tools was still described to the agent as if it could.
+   */
+  const info =
+    provider.engine === 'openai-compatible'
+      ? cachedModel(baseUrlFor(deps.settings, provider.id), deps.model)
+      : null
+
+  const capabilities = capabilitiesFor({ providerId: provider.id, model: deps.model, info })
 
   if (provider.engine === 'claude-cli') {
     const binary = resolveClaudeBinary()
@@ -239,7 +272,7 @@ export function createEngine(
 
   const baseUrl = baseUrlFor(deps.settings, provider.id)
   const apiKey = provider.secretRef ? (deps.secret(provider.secretRef) ?? null) : null
-  return new ApiEngine({ provider, baseUrl, apiKey, capabilities }, options, onEvent)
+  return new ApiEngine({ provider, baseUrl, apiKey, capabilities, info }, options, onEvent)
 }
 
 /**
@@ -253,7 +286,11 @@ export async function modelsFor(
   providerId: string,
   secret: (ref: string) => string | undefined,
   force = false
-): Promise<{ models: ModelInfo[]; error: string | null }> {
+): Promise<{
+  models: ModelInfo[]
+  error: string | null
+  configured?: { model: string | null; effort: string | null }
+}> {
   const provider = providerById(providerId)
   if (!provider) return { models: [], error: `unknown provider "${providerId}"` }
 
@@ -268,7 +305,10 @@ export async function modelsFor(
      */
     const binary = resolveCodexBinary()
     if (!binary) return { models: [], error: 'The Codex CLI could not be found.' }
-    return codexModels(binary, force)
+    // The user's own `config.toml` alongside the catalogue: "use your Codex default" is a real
+    // choice, and without knowing which model that resolves to there is no level list to offer
+    // for it. `codexConfigDefaults` existed for this and nothing was reading it.
+    return { ...(await codexModels(binary, force)), configured: codexConfigDefaults() }
   }
 
   if (provider.engine !== 'openai-compatible') {

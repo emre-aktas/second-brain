@@ -6,9 +6,11 @@ import type {
   ChatBlock,
   ChatImage,
   ChatMessage,
+  EnginePrefs,
   TurnFollowups
 } from '@shared/types'
 import type { TurnState } from '@shared/ipc'
+import { providerById } from '@shared/engines'
 import type { GenUiSpec } from '@shared/genui'
 import { writePath } from '@shared/bindings'
 import type { BrainCore } from '../core'
@@ -20,7 +22,7 @@ import {
   type ClaudeStreamEvent,
   type ContentBlock
 } from './claude'
-import { buildSystemPrompt } from './prompt'
+import { buildSystemPrompt, deniedBrainTools } from './prompt'
 import { ToolHost } from './toolhost'
 import { buildBrainTools, type IntegrationBridge } from './tools'
 import type { AgentEngine } from './engine'
@@ -39,6 +41,11 @@ import { createLogger } from '../logger'
 const log = createLogger('agent')
 
 const IDLE_SHUTDOWN_MS = 15 * 60_000
+
+/** Whoever is answering, by the name the user chose them under. */
+function engineLabel(providerId: string): string {
+  return providerById(providerId)?.label ?? providerId
+}
 
 /**
  * How much of a conversation is replayed to an engine that cannot resume.
@@ -209,9 +216,19 @@ export class AgentManager {
    * when that was the only engine — and it means nothing to an API provider. Ignoring it there
    * keeps the tool working rather than failing with a name the provider has never heard of.
    */
-  private resolveModel(override?: string | null): string {
+  private resolveModel(prefs?: EnginePrefs | null): string {
     const providerId = this.core.settings.engine.providerId
     const configured = modelFor(this.core.settings, providerId)
+    /*
+     * A tool's or a task's own model, for *this* engine.
+     *
+     * The override used to be one value holding a Claude name, so it could only be honoured on
+     * Claude — on any other engine a tool's carefully chosen fast model was discarded and the
+     * turn ran on whatever the provider was set to globally. The setting existed, the panel
+     * offered it, and it silently did nothing. Keyed by provider, it means what it says on every
+     * engine, and a tool set up before a switch keeps its old choice for when you switch back.
+     */
+    const override = prefs?.[providerId]?.model
 
     /*
      * `settings.model` is the *Claude* model name — "opus", "sonnet" — and it is not a fallback
@@ -220,12 +237,8 @@ export class AgentManager {
      * The empty string is the honest answer for a provider with nothing chosen, and readiness
      * turns that into a sentence rather than a request.
      */
-    if (providerId === 'claude-cli') return override ?? (configured || this.core.settings.model)
-
-    // A model pinned on a saved tool or a scheduled task is a Claude name, chosen when that was
-    // the only engine, so it is ignored here rather than forwarded to a provider that has never
-    // heard of it.
-    return configured
+    if (providerId === 'claude-cli') return override || configured || this.core.settings.model
+    return override || configured
   }
 
   /**
@@ -240,10 +253,13 @@ export class AgentManager {
    * A per-tool or per-task effort is a Claude tier, chosen when that was the only engine, so it
    * is honoured only there.
    */
-  private resolveEffort(override?: AgentEffort | null): string {
+  private resolveEffort(prefs?: EnginePrefs | null): string {
     const providerId = this.core.settings.engine.providerId
-    if (providerId === 'claude-cli') return override ?? this.core.settings.effort
-    return effortFor(this.core.settings, providerId)
+    // Same shape and same reason as the model above: a level belongs to an engine's own ladder,
+    // so it is stored under the engine it was chosen for.
+    const override = prefs?.[providerId]?.effort
+    if (providerId === 'claude-cli') return override || this.core.settings.effort
+    return override || effortFor(this.core.settings, providerId)
   }
 
   /**
@@ -382,8 +398,8 @@ export class AgentManager {
     const runtime = this.ensureRuntime(
       session.id,
       capability,
-      this.resolveModel(options.model),
-      this.resolveEffort(options.effort),
+      this.resolveModel(options.enginePrefs),
+      this.resolveEffort(options.enginePrefs),
       options.unattended === true
     )
 
@@ -574,8 +590,12 @@ export class AgentManager {
         cwd: this.core.paths.root,
         model,
         capability,
+        // The CLI engines carry this in the MCP bridge's environment; an API engine calls the
+        // tool host directly and has to be told, or `ask_user`, `render_ui` and
+        // `suggest_followups` all succeed and do nothing.
+        sessionId,
         appendSystemPrompt: systemPrompt,
-        mcpConfig: this.buildMcpConfig(sessionId),
+        mcpConfig: this.buildMcpConfig(sessionId, capability),
         // Only when it belongs to this engine. A Codex thread id handed to Claude as something
         // to resume fails inside a turn the user is waiting on, and switching engine mid-chat
         // is exactly when that would happen.
@@ -635,7 +655,10 @@ export class AgentManager {
    * straight to Claude Code rather than proxied through us — it already knows how
    * to speak both transports, and a passthrough keeps their tool schemas intact.
    */
-  private buildMcpConfig(sessionId: string): Record<string, unknown> {
+  private buildMcpConfig(
+    sessionId: string,
+    capability: AgentCapability
+  ): Record<string, unknown> {
     if (!this.toolHost.bridgePath) {
       throw new Error('tool host is not started')
     }
@@ -650,7 +673,16 @@ export class AgentManager {
           ELECTRON_RUN_AS_NODE: '1',
           BRAIN_URL: this.toolHost.url,
           BRAIN_TOKEN: this.toolHost.token,
-          BRAIN_SESSION_ID: sessionId
+          BRAIN_SESSION_ID: sessionId,
+          /*
+           * The capability tier, enforced at the bridge as well as at the spawn.
+           *
+           * Claude is also given `--disallowedTools`, but Codex has no equivalent flag — so a
+           * read-only Codex chat had a dutifully read-only *sandbox* and full write access to
+           * the vault through the brain tools. The gate belongs here because this is the one
+           * place every CLI engine's tool calls pass through.
+           */
+          BRAIN_DENY: deniedBrainTools(capability).join(',')
         }
       }
     }
@@ -999,14 +1031,17 @@ export class AgentManager {
           this.emit({
             type: 'error',
             sessionId,
-            message: `Claude reported a usage limit: ${event.text.slice(0, 200)}`
+            // Named after whichever engine said it. "Claude reported a usage limit" in front of
+            // someone running DeepSeek names the wrong provider and sends them to check the
+            // wrong account.
+            message: `${engineLabel(this.core.settings.engine.providerId)} reported a usage limit: ${event.text.slice(0, 200)}`
           })
           break
         }
 
         // The CLI writes progress chatter here too; only surface real failures.
         if (/error|fatal|unauthorized|not found|invalid/i.test(event.text)) {
-          log.warn(`claude: ${event.text.slice(0, 300)}`)
+          log.warn(`${this.core.settings.engine.providerId}: ${event.text.slice(0, 300)}`)
         }
         break
       }

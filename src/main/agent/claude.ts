@@ -325,6 +325,12 @@ export class ClaudeProcess {
         reasoning: true,
         toolCalling: true,
         accountConnectors: true,
+        // The one engine that is genuinely confined: it keeps its sandbox because it does not
+        // have to be launched with the flag that removes it.
+        sandboxed: true,
+        // Claude Code namespaces MCP tools, and can fetch one on demand.
+        toolPrefix: 'mcp__brain__',
+        deferredTools: true,
         metered: false,
         usageWindows: true
       }

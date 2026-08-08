@@ -92,6 +92,21 @@ export interface PromptContext {
 export function buildSystemPrompt(ctx: PromptContext): string {
   const sections: string[] = []
 
+  /*
+   * The tools, named the way *this* engine names them.
+   *
+   * Hardcoded as `mcp__brain__*` before, which is Claude Code's MCP namespacing and nobody
+   * else's: Codex calls them by their bare names and an API engine is handed the bare names by
+   * us. So on two engines out of three this paragraph named a set of tools that did not exist,
+   * and the paragraph after it offered a way to load them that did not exist either. The
+   * symptom was subtle and exactly what you would predict — reading still worked, because a
+   * search tool is recognisable from its description alone, while the things the prompt has to
+   * actively push the model into (answering through `render_ui` rather than in prose) quietly
+   * stopped happening.
+   */
+  const tool = (name: string): string => `${ctx.engine?.toolPrefix ?? 'mcp__brain__'}${name}`
+  const family = (...names: string[]): string => names.map(tool).join(', ')
+
   sections.push(`# You are Second Brain
 
 You are the intelligence inside a desktop knowledge app. The user's notes are
@@ -99,22 +114,35 @@ markdown files on their own disk; a physics-driven graph of those notes fills th
 main window, and you appear beside it. You are not a general assistant who
 happens to have file access — you are the part of this app that thinks.
 
-Everything you do runs through the mcp__brain__* tools:
+Everything you do runs through these tools, and they are called exactly this:
 
-  reading    search_notes, get_note, list_recent_notes, graph_overview,
-             graph_neighborhood, list_activity, recall
-  writing    create_note, update_note, trash_note, link_notes, unlink_notes,
-             remember, log_activity, suggest
-  interface  render_ui, focus_graph, ask_user, suggest_followups, design_principles, tool_api
-  reuse      create_interactive_tool, preview_tool, inspect_tool,
-             update_tool_definition, get_tool_state, update_tool_state,
-             save_tool, list_saved_tools, delete_saved_tool
-  services   list_integrations, call_integration
+  reading    ${family('search_notes', 'get_note', 'list_recent_notes', 'graph_overview')}
+             ${family('graph_neighborhood', 'list_activity', 'recall')}
+  writing    ${family('create_note', 'update_note', 'trash_note', 'link_notes', 'unlink_notes')}
+             ${family('remember', 'log_activity', 'suggest')}
+  interface  ${family('render_ui', 'focus_graph', 'ask_user', 'suggest_followups')}
+             ${family('design_principles', 'tool_api')}
+  reuse      ${family('create_interactive_tool', 'preview_tool', 'inspect_tool')}
+             ${family('update_tool_definition', 'get_tool_state', 'update_tool_state')}
+             ${family('save_tool', 'list_saved_tools', 'delete_saved_tool')}
+  services   ${family('list_integrations', 'call_integration')}${
+    ctx.engine && !ctx.engine.deferredTools
+      ? `
+
+They are all in your tool list. Your client may present them under a namespace —
+\`brain.search_notes\`, \`brain__search_notes\` and so on — so match on the part
+after the namespace and call whatever name your own list shows.
+
+Never tell the user a tool is unavailable without having called it. If one really
+is withheld, the call comes back refused and says why, and *that* you can report.
+An assumption of unavailability is not a finding.`
+      : `
 
 These load on demand. If one is not in your tool list yet, load it in a single
 ToolSearch call using the select form — for example
-\`select:mcp__brain__search_notes,mcp__brain__render_ui\` — rather than searching
-by keyword one at a time.`)
+\`select:${tool('search_notes')},${tool('render_ui')}\` — rather than searching
+by keyword one at a time.`
+  }`)
 
   sections.push(`## The vault
 
@@ -648,7 +676,7 @@ say so in a clause, not a paragraph.`)
     if (!ctx.engine.builtInTools) {
       limits.push(
         '- You have NO shell and NO general file access. Everything you do goes through the ' +
-          'mcp__brain__* tools. Do not offer to run commands or edit files outside the vault.'
+          'brain tools listed above. Do not offer to run commands or edit files outside the vault.'
       )
     }
     if (!ctx.engine.accountConnectors) {
@@ -728,20 +756,43 @@ export function deniedToolsForUnattended(capability: AgentCapability): string[] 
   return [...deniedToolsFor(capability), ...OUTBOUND_CONNECTOR_TOOLS]
 }
 
+/**
+ * Brain tools that change the vault or reach a connected service, by their own names.
+ *
+ * Bare rather than `mcp__brain__`-prefixed, because there are now two ways a tool gets called and
+ * only one of them goes through MCP. The CLI engines are handed the prefixed form as
+ * `--disallowedTools`; an API engine is handed a tool list we build ourselves and has to filter
+ * this list out of it. One array, two spellings derived from it — the alternative is two lists
+ * that agree until someone adds a tool to one of them, and the failure there is a read-only chat
+ * quietly being allowed to write.
+ */
+export const MUTATING_BRAIN_TOOLS = [
+  'create_note',
+  'update_note',
+  'trash_note',
+  'link_notes',
+  'unlink_notes',
+  'call_integration',
+  'register_integration'
+]
+
+/**
+ * The brain tools an API engine may not be offered, given its tier.
+ *
+ * An API engine has no shell and no built-in file tools, so the built-in denials mean nothing to
+ * it and the connector denials are unreachable by construction — what is left is exactly this.
+ * Withheld from the tool list rather than refused on call: a model that is never told a tool
+ * exists cannot spend a step discovering it is forbidden.
+ */
+export function deniedBrainTools(capability: AgentCapability): string[] {
+  return capability === 'read-only' ? [...MUTATING_BRAIN_TOOLS] : []
+}
+
 export function deniedToolsFor(capability: AgentCapability): string[] {
   // Built-ins that can write to disk or run commands.
   const writeBuiltins = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit']
 
-  // Brain tools that change the vault or reach a connected service.
-  const mutatingBrainTools = [
-    'mcp__brain__create_note',
-    'mcp__brain__update_note',
-    'mcp__brain__trash_note',
-    'mcp__brain__link_notes',
-    'mcp__brain__unlink_notes',
-    'mcp__brain__call_integration',
-    'mcp__brain__register_integration'
-  ]
+  const mutatingBrainTools = MUTATING_BRAIN_TOOLS.map((name) => `mcp__brain__${name}`)
 
   switch (capability) {
     case 'read-only':
