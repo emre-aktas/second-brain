@@ -357,6 +357,45 @@ async function main(): Promise<void> {
       !/Install Claude Code/i.test(shot.placeholder ?? ''),
       shot.placeholder
     )
+
+    /*
+     * And pressing Send actually sends.
+     *
+     * The composer being enabled was only half of it: `sendMessage` had the same
+     * `bootstrap.agent.available` guard one layer down, so a message typed into an enabled box
+     * was swallowed and answered with a toast about installing Claude Code. Which is why it still
+     * looked broken after the composer was fixed.
+     */
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const textarea = document.querySelector('textarea')
+        if (!textarea) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+        setter.call(textarea, 'does this reach the engine?')
+        textarea.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`
+    )
+    await settle(250)
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const send = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Send')
+        send?.click()
+        return true
+      })()`
+    )
+    await settle(700)
+
+    const after = (await win.webContents.executeJavaScript(
+      `(() => {
+        const textarea = document.querySelector('textarea')
+        return { text: document.body.innerText, draft: textarea ? textarea.value : null }
+      })()`
+    )) as { text: string; draft: string | null }
+
+    check('no install toast when the message is sent', !/Claude CLI not found/i.test(after.text), after.text.slice(0, 400))
+    // A sent message clears the box; a swallowed one leaves the text sitting there.
+    check('and the message left the composer', after.draft === '', after)
   }
 
   /* ------------------------------------------------- and an engine that is not ready */

@@ -8,6 +8,17 @@ load-bearing — `notesFromChangelog` in `src/main/updater.ts` finds a release b
 Keep them as `## <version>` with the newest first. `npm run release` writes the skeleton for a
 new one from the commits since the last release; edit it before pushing.
 
+## 0.6.1
+
+*2026-08-08*
+
+### 🚪 Sending a message no longer needs Claude installed
+
+0.6.0 stopped the chat from *looking* blocked when another engine was running, but the send itself
+still checked for the Claude CLI one layer down — so a message typed into a perfectly enabled box
+was swallowed, and answered with a toast telling you to install Claude Code. That check now asks
+the same question everything else does: can the engine you actually chose answer.
+
 ## 0.6.0
 
 *2026-08-08*

@@ -453,10 +453,21 @@ export const useApp = create<AppState>((set, get) => ({
     if (!trimmed && (extra?.images?.length ?? 0) === 0) return
     const state = get()
     if (!state.session) return
-    if (!state.bootstrap?.agent.available) {
-      toast.error('Claude CLI not found', {
-        description: 'Install Claude Code and make sure `claude` is on your PATH.'
-      })
+    /*
+     * Refused only when *the selected engine* cannot answer.
+     *
+     * This guarded on `bootstrap.agent.available` — `resolveClaudeBinary() !== null` — so with
+     * DeepSeek selected and working, pressing Send swallowed the message and put up a toast about
+     * installing Claude Code. The composer had already been fixed to stay enabled; this was the
+     * same bug one layer down, which is why it still looked broken.
+     *
+     * `engine.blocked` is the engine's own sentence, the same one the Engine tab and the strip
+     * above the composer show. Null while the first read is in flight, and that is treated as
+     * "go ahead": the main process checks readiness too and fails the turn with the reason, so
+     * the cost of being optimistic is an honest error rather than a message quietly dropped.
+     */
+    if (state.engine?.blocked) {
+      toast.error('The agent cannot answer yet', { description: state.engine.blocked })
       return
     }
 
