@@ -241,6 +241,11 @@ async function main(): Promise<void> {
     ['update:whatsNew', null],
     ['app:settings:get', SETTINGS],
     ['engine:state', stateFor('claude-cli')],
+    // A machine with neither CLI on it, which is the state the flow had no answer for.
+    [
+      'engine:cliStatus',
+      { providerId: 'codex-cli', installed: false, path: null, version: null, signedIn: null, account: null }
+    ],
     ['engine:models', { models: [GENERIC_MODEL], error: null }],
     // Storing a setting must not switch the engine, so setup can configure as it goes and select
     // once at the end. Answered with the same state, which is what the panel does with it.
@@ -556,6 +561,152 @@ async function main(): Promise<void> {
 
     writeFileSync(join(OUT, 'engine-verify.png'), (await win.webContents.capturePage()).toPNG())
     log(`  wrote ${join(OUT, 'engine-verify.png')}`)
+  }
+
+  /* ------------------------------------------- installing a CLI from nothing */
+
+  log('\ninstalling a CLI that is not there')
+  {
+    /*
+     * The whole flow for someone who has never used a terminal.
+     *
+     * Choosing Codex without having Codex used to produce a toast — "Codex is not installed on
+     * this machine" — and stop. A problem named, no way through it, and a search engine as the
+     * next step. This walks the replacement: install, sign in, check.
+     */
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const back = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Back')
+        back?.click()
+        return true
+      })()`
+    )
+    await settle(300)
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const change = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Change')
+        change?.click()
+        return true
+      })()`
+    )
+    await settle(400)
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.startsWith('Codex')
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(800)
+
+    const install = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const text = install.text ?? ''
+
+    check('choosing an absent CLI opens a step, not a dead end', /Install Codex/i.test(text), text.slice(0, 400))
+    check('and its plan is three steps', /Codex · step 1 of 3/i.test(text), text.slice(0, 200))
+    check(
+      'it says what the thing even is',
+      /separate program that runs on your computer/i.test(text),
+      text.slice(0, 500)
+    )
+
+    /*
+     * A command, for the platform this app is running on, that can be copied.
+     *
+     * Quoted from the vendor's own documentation rather than remembered — a wrong install
+     * command is precisely the dead end this step exists to remove.
+     */
+    check('there is a command to run', /winget install OpenAI.Codex|codex\/install\.sh|@openai\/codex/.test(text), text.slice(0, 700))
+    check('it names the terminal to paste it into', /Paste this into/i.test(text), text.slice(0, 700))
+    check(
+      'and it can be copied rather than retyped',
+      (install.buttons ?? []).some((label) => /Copy/i.test(label)),
+      install.buttons
+    )
+    // The button that makes the flow work at all: the binary path is cached, so without a
+    // deliberate re-look someone is told it is still missing until they restart the app.
+    check(
+      'there is a way to say it is done',
+      (install.buttons ?? []).some((label) => /I have installed it/i.test(label)),
+      install.buttons
+    )
+    /*
+     * And no failure is reported before anyone has tried anything.
+     *
+     * The panel looked once on the way in, so the "still not finding it" advice is true from the
+     * first frame — and in front of someone who has not yet been asked to do anything it reads
+     * as an error rather than as the result of their attempt.
+     */
+    check('and nothing is reported as failing yet', !/Still not finding it/i.test(text), text.slice(0, 700))
+
+    writeFileSync(join(OUT, 'engine-install.png'), (await win.webContents.capturePage()).toPNG())
+    log(`  wrote ${join(OUT, 'engine-install.png')}`)
+
+    /* --------------------------------------------------- and then signing in */
+
+    ipcMain.removeHandler('engine:cliStatus')
+    ipcMain.handle('engine:cliStatus', () => ({
+      providerId: 'codex-cli',
+      installed: true,
+      path: 'C:/codex.exe',
+      version: 'codex-cli 0.147.0',
+      /*
+       * Unknown, which is Codex's real answer and the interesting one.
+       *
+       * `codex login status` prints "Logged in using ChatGPT" even with a spent refresh token, so
+       * a positive from it is worthless. The app reads a negative as fact and everything else as
+       * unknown — and says so, rather than showing a green tick it cannot stand behind.
+       */
+      signedIn: null,
+      account: null
+    }))
+
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) =>
+          el.innerText.includes('I have installed it')
+        )
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(900)
+
+    const signin = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    const signinText = signin.text ?? ''
+    check('finding it moves straight on rather than congratulating you', /Sign Codex in/i.test(signinText), signinText.slice(0, 300))
+    check('it is step 2', /step 2 of 3/i.test(signinText), signinText.slice(0, 200))
+    check('with the sign-in command', /codex login/.test(signinText), signinText.slice(0, 600))
+    check(
+      'and says what running it does',
+      /Opens your browser/i.test(signinText),
+      signinText.slice(0, 600)
+    )
+    /*
+     * The honesty that matters most for Codex: it reports being logged in while its refresh
+     * token is spent, so a positive from it cannot be trusted and the screen says so.
+     */
+    check(
+      'it warns that the next step is the real answer',
+      /does not report this reliably/i.test(signinText),
+      signinText.slice(0, 800)
+    )
+
+    writeFileSync(join(OUT, 'engine-signin.png'), (await win.webContents.capturePage()).toPNG())
+    log(`  wrote ${join(OUT, 'engine-signin.png')}`)
+
+    await win.webContents.executeJavaScript(
+      `(() => {
+        const target = Array.from(document.querySelectorAll('button')).find((el) => el.innerText.trim() === 'Continue')
+        target?.click()
+        return true
+      })()`
+    )
+    await settle(700)
+    const last = (await win.webContents.executeJavaScript(MEASURE)) as Shot
+    check('and it ends on the real check', /step 3 of 3/i.test(last.text ?? ''), (last.text ?? '').slice(0, 300))
   }
 
   /* --------------------------------------------- an engine that cannot run yet */

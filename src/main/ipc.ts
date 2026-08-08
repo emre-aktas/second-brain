@@ -31,6 +31,7 @@ import {
   resolveCodexBinary
 } from './agent/engines/factory'
 import { cachedModel, forgetModels } from './agent/engines/catalogue'
+import { cliStatus } from './agent/engines/cli'
 import { verifyEngine } from './agent/engines/verify'
 
 const log = createLogger('ipc')
@@ -730,6 +731,8 @@ export function registerIpc(ctx: IpcContext): void {
     },
 
     'engine:test': async ({ providerId, model }) => engineTest(providerId, model),
+
+    'engine:cliStatus': async ({ providerId, recheck }) => cliStatus(providerId, recheck === true),
 
     'engine:verify': async ({ providerId, model }) => {
       const provider = providerById(providerId)

@@ -10,13 +10,16 @@ import {
   Minus,
   PlugZap,
   Repeat,
+  Copy,
+  Download,
+  LogIn,
   Search,
   Server,
   Sparkles,
   Wallet,
   Wrench
 } from 'lucide-react'
-import type { EngineState, ModelInfo, ProviderState } from '@shared/engines'
+import type { CliStatus, EngineState, ModelInfo, ProviderState } from '@shared/engines'
 import type { ApiResult } from '@shared/ipc'
 import type { AgentEffort } from '@shared/types'
 import { api, errorMessage } from '@/lib/api'
@@ -54,7 +57,7 @@ import { ClaudeEngineDetails } from '@/components/panels/SidePanels'
  * step 1 anywhere. The plan is computed from the provider instead, and the numbering reads off
  * the plan, so a two-step provider and a four-step one are each described correctly.
  */
-type StepId = 'provider' | 'endpoint' | 'credential' | 'model' | 'verify'
+type StepId = 'provider' | 'install' | 'signin' | 'endpoint' | 'credential' | 'model' | 'verify'
 type Step = StepId | 'done'
 
 /** What the end-to-end check reported, in the shape the main process sends it. */
@@ -80,6 +83,8 @@ const EFFORT_BLURBS: Record<string, string> = {
 
 const STEP_TITLES: Record<StepId, string> = {
   provider: 'Choose a provider',
+  install: 'Install it',
+  signin: 'Sign in',
   endpoint: 'Point at the endpoint',
   credential: 'Connect it',
   model: 'Choose a model',
@@ -95,7 +100,16 @@ const STEP_TITLES: Record<StepId, string> = {
  * session that expired without saying so.
  */
 function planFor(entry: ProviderState): StepId[] {
-  if (entry.provider.engine !== 'openai-compatible') return ['verify']
+  /*
+   * A CLI is a program on the machine, so its setup is: get it, sign in to it, check it.
+   *
+   * This used to be `['verify']` alone, on the assumption that anyone choosing Codex already had
+   * Codex. Someone who does not got a toast — "Codex is not installed on this machine" — and
+   * nothing else: a problem named, no way through, and a search engine as the next step. The
+   * steps are always in the plan even when they are already satisfied, because the numbering is
+   * about the shape of the job rather than about how much of it happens to be done.
+   */
+  if (entry.provider.engine !== 'openai-compatible') return ['install', 'signin', 'verify']
 
   const steps: StepId[] = []
   // Asked first for the providers whose address is the whole configuration, and offered as an
@@ -126,7 +140,33 @@ export function EnginePanel(): React.JSX.Element {
    * against it, and the switch happens once — after it has been shown to answer.
    */
   const [draftModel, setDraftModel] = useState('')
+  /**
+   * What the CLI looks like right now, re-asked after every step someone completes.
+   *
+   * Held here rather than inside the steps so that pressing "I have installed it" on one step
+   * and landing on the next does not re-run the lookup from scratch — and so that `begin` and
+   * the steps agree about what they are looking at.
+   */
+  const [cli, setCli] = useState<CliStatus | null>(null)
+  const [checking, setChecking] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  /** Look again, forgetting the cached binary path — see `engine:cliStatus`. */
+  const recheckCli = useCallback(
+    async (providerId: string, advanceWhenReady?: (status: CliStatus) => void): Promise<void> => {
+      setChecking(true)
+      try {
+        const status = await api.cliStatus(providerId, true)
+        setCli(status)
+        advanceWhenReady?.(status)
+      } catch (err) {
+        toast.error('Could not check', { description: errorMessage(err) })
+      } finally {
+        setChecking(false)
+      }
+    },
+    []
+  )
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -156,6 +196,7 @@ export function EnginePanel(): React.JSX.Element {
     setStep('done')
     setDraftId(null)
     setDraftModel('')
+    setCli(null)
   }
 
   /** The next step in the plan, skipping anything this provider has already satisfied. */
@@ -179,18 +220,37 @@ export function EnginePanel(): React.JSX.Element {
     const entry = state.providers.find((p) => p.provider.id === providerId)
     if (!entry) return
 
-    if (entry.provider.engine !== 'openai-compatible' && !entry.installed) {
-      toast.error(`${entry.provider.label} is not installed on this machine`, {
-        description: entry.provider.keyUrl ? `Install it from ${entry.provider.keyUrl}` : undefined
-      })
-      return
-    }
-
     setDraftId(providerId)
     setDraftModel(entry.model)
 
     if (at) {
       setStep(at)
+      return
+    }
+
+    const steps = planFor(entry)
+
+    /*
+     * A CLI's entry step is decided from live state, not from the cached panel read.
+     *
+     * `engine:state` answers "is the binary there" cheaply, but not "is it signed in" — that
+     * costs a spawn, and putting it in the read every surface makes would charge the whole app
+     * for a question only this screen asks. So the CLI path asks once, here, at the moment
+     * someone chooses the provider.
+     */
+    if (entry.provider.engine !== 'openai-compatible') {
+      setStep('install')
+      void api
+        .cliStatus(providerId)
+        .then((status) => {
+          setCli(status)
+          // Skipped only forward: someone who has it and is signed in lands on the check, and
+          // the steps behind stay reachable through Back.
+          if (!status.installed) setStep('install')
+          else if (status.signedIn === false) setStep('signin')
+          else setStep('verify')
+        })
+        .catch(() => setStep('install'))
       return
     }
 
@@ -201,7 +261,6 @@ export function EnginePanel(): React.JSX.Element {
      * they are skipped — but the *numbering* now comes from the plan rather than from a literal,
      * which is what made a returning user land on "Step 2 of 2" with no step 1 in existence.
      */
-    const steps = planFor(entry)
     const first =
       steps.find((id) => {
         /*
@@ -278,6 +337,36 @@ export function EnginePanel(): React.JSX.Element {
           {draft && step !== 'done' && step !== 'provider' && (
             <>
               <StepHeading plan={plan} current={step} label={draft.provider.label} />
+
+              {step === 'install' && (
+                <InstallStep
+                  entry={draft}
+                  status={cli}
+                  checking={checking}
+                  onRecheck={() =>
+                    void recheckCli(draft.provider.id, (status) => {
+                      // Straight on when it is there. Someone who has just installed something
+                      // does not want to be told it worked and then press Continue as well.
+                      if (status.installed) setStep(status.signedIn === true ? 'verify' : 'signin')
+                    })
+                  }
+                  onSkip={() => setStep(cli?.signedIn === true ? 'verify' : 'signin')}
+                />
+              )}
+
+              {step === 'signin' && (
+                <SignInStep
+                  entry={draft}
+                  status={cli}
+                  checking={checking}
+                  onRecheck={() =>
+                    void recheckCli(draft.provider.id, (status) => {
+                      if (status.signedIn === true) setStep('verify')
+                    })
+                  }
+                  onSkip={() => setStep('verify')}
+                />
+              )}
 
               {step === 'endpoint' && (
                 <EndpointStep
@@ -389,6 +478,285 @@ function StepHeading({
         ))}
       </p>
     </div>
+  )
+}
+
+/* --------------------------------------------------------- getting a CLI installed */
+
+/** The platform the app is running on, as the install routes name it. */
+function currentPlatform(): 'win32' | 'darwin' | 'linux' {
+  const platform = window.brain.platform
+  return platform === 'win32' || platform === 'darwin' ? platform : 'linux'
+}
+
+/**
+ * One command, with the terminal to run it in and a button that copies it.
+ *
+ * Copy rather than "let us run it": the app spawning a shell that pipes a script off the
+ * internet would be doing something the user cannot see, on their machine, with their
+ * permissions. Handing them the exact line and naming the terminal is the same help without the
+ * part where they have to take our word for it.
+ */
+function CommandBlock({ shell, command }: { shell: string; command: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(command)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    } catch {
+      toast.error('Could not copy it — select the text and copy it by hand')
+    }
+  }
+
+  return (
+    <div className="mt-1.5 rounded-md border border-border/70 bg-secondary/20">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 px-2 py-1">
+        <span className="text-[10.5px] text-muted-foreground">Paste this into {shell}</span>
+        <Button size="xs" variant="ghost" onClick={() => void copy()}>
+          {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      {/* Selectable and wrapping: a command that needs a horizontal scrollbar to read is a
+          command someone will copy half of. */}
+      <p className="select-text break-all px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
+        {command}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Get the program onto the machine.
+ *
+ * The step that did not exist. Choosing Codex without having Codex produced a toast naming the
+ * problem and nothing else, which for someone who has never opened a terminal is where the app
+ * ended. Every command here is quoted from the vendor's own current documentation, and the
+ * recommended route on each platform is the one with no prerequisite — npm needs Node, Homebrew
+ * needs Homebrew, and meeting a second problem before the first is solved is how people give up.
+ */
+function InstallStep({
+  entry,
+  status,
+  checking,
+  onRecheck,
+  onSkip
+}: {
+  entry: ProviderState
+  status: CliStatus | null
+  checking: boolean
+  onRecheck: () => void
+  onSkip: () => void
+}): React.JSX.Element {
+  const setup = entry.provider.setup
+  const platform = currentPlatform()
+  const routes = (setup?.install ?? []).filter((route) => route.platforms.includes(platform))
+  const [chosen, setChosen] = useState(routes[0]?.id ?? '')
+  /**
+   * Whether the user has pressed the button yet.
+   *
+   * The panel already looked once, on the way in — but "still not finding it" in front of
+   * someone who has not yet been asked to do anything reads as an error rather than as the
+   * result of their attempt. It belongs to the second look, not the first.
+   */
+  const [tried, setTried] = useState(false)
+  const route = routes.find((option) => option.id === chosen) ?? routes[0]
+
+  if (!setup) return <></>
+
+  return (
+    <Card className="bg-card/60 px-3 py-3">
+      <p className="flex items-center gap-1.5 text-[13.5px] font-medium text-foreground">
+        <Download className="size-3.5" />
+        Install {entry.provider.label}
+      </p>
+
+      {status?.installed ? (
+        <>
+          <p className="mt-1.5 flex items-start gap-1.5 rounded border border-success/25 bg-success/8 px-2 py-1.5 text-[11px] leading-snug text-foreground">
+            <Check className="mt-px size-3 shrink-0 text-success" />
+            Already on this computer{status.version ? ` — ${status.version}` : ''}.
+          </p>
+          {status.path && (
+            <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+              {status.path}
+            </p>
+          )}
+          <Button size="sm" className="mt-2.5" onClick={onSkip}>
+            Continue
+          </Button>
+        </>
+      ) : (
+        <>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
+            {entry.provider.label} is a separate program that runs on your computer — this app
+            drives it. You install it once and it stays.
+          </p>
+
+          {/*
+            More than one way in, because the right one depends on what someone already has. The
+            first needs nothing else installed first, which is why it leads.
+          */}
+          {routes.length > 1 && (
+            <div className="mt-2.5 flex flex-wrap gap-1">
+              {routes.map((option, index) => (
+                <CodexLevel
+                  key={option.id}
+                  label={index === 0 ? `${option.label} · easiest` : option.label}
+                  active={option.id === (route?.id ?? '')}
+                  onClick={() => setChosen(option.id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {route && (
+            <>
+              <CommandBlock shell={route.shell} command={route.command} />
+              {route.hint && (
+                <p className="mt-1 text-[11px] leading-snug text-muted-foreground text-pretty">
+                  {route.hint}
+                </p>
+              )}
+            </>
+          )}
+
+          <p className="mt-2 text-[11px] leading-snug text-muted-foreground text-pretty">
+            When it finishes, come back here and press the button below. If you would rather read
+            the official instructions first,{' '}
+            <button
+              type="button"
+              onClick={() => void api.openExternal(setup.downloadUrl)}
+              className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              they are here
+            </button>
+            .
+          </p>
+
+          <div className="mt-2.5 flex items-center gap-1.5">
+            <Button
+              size="sm"
+              onClick={() => {
+                setTried(true)
+                onRecheck()
+              }}
+              disabled={checking}
+            >
+              {checking ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Repeat className="size-3.5" />
+              )}
+              {checking ? 'Looking…' : 'I have installed it'}
+            </Button>
+          </div>
+
+          {/*
+            Said only after a look that found nothing — before that it is a warning about
+            something that has not happened yet.
+          */}
+          {tried && status && !status.installed && !checking && (
+            <p className="mt-2 flex items-start gap-1.5 rounded border border-warning/30 bg-warning/8 px-2 py-1.5 text-[11px] leading-snug text-warning text-pretty">
+              <AlertTriangle className="mt-px size-3 shrink-0" />
+              {/* One flex item, not three. The icon and the sentence are the children here, so a
+                  bare <span> inside the sentence would be laid out beside it rather than in it. */}
+              <span>
+                Still not finding it. If the install has just finished, close your terminal and
+                open a new one — and if that does not help, run{' '}
+                <span className="font-mono">{setup.verifyCommand}</span> there to see what it
+                says.
+              </span>
+            </p>
+          )}
+        </>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * Sign the CLI in to an account.
+ *
+ * Its own step because it is a separate failure with a separate fix — and because for Codex it is
+ * the one that comes back: the ChatGPT session expires and says so only when a turn fails, in a
+ * sentence about refresh tokens that means nothing to anyone. Whoever reads this screen once
+ * knows where to return to.
+ */
+function SignInStep({
+  entry,
+  status,
+  checking,
+  onRecheck,
+  onSkip
+}: {
+  entry: ProviderState
+  status: CliStatus | null
+  checking: boolean
+  onRecheck: () => void
+  onSkip: () => void
+}): React.JSX.Element {
+  const setup = entry.provider.setup
+  if (!setup) return <></>
+
+  const signedIn = status?.signedIn === true
+
+  return (
+    <Card className="bg-card/60 px-3 py-3">
+      <p className="flex items-center gap-1.5 text-[13.5px] font-medium text-foreground">
+        <LogIn className="size-3.5" />
+        Sign {entry.provider.label} in
+      </p>
+
+      {signedIn ? (
+        <p className="mt-1.5 flex items-start gap-1.5 rounded border border-success/25 bg-success/8 px-2 py-1.5 text-[11px] leading-snug text-foreground">
+          <Check className="mt-px size-3 shrink-0 text-success" />
+          Signed in{status?.account ? ` — ${status.account}` : ''}.
+        </p>
+      ) : (
+        <>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-muted-foreground text-pretty">
+            {setup.signIn.blurb}
+          </p>
+          <CommandBlock shell="a terminal" command={setup.signIn.command} />
+          {setup.account && (
+            <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground text-pretty">
+              {setup.account}
+            </p>
+          )}
+        </>
+      )}
+
+      <div className="mt-2.5 flex items-center gap-1.5">
+        {!signedIn && (
+          <Button size="sm" variant="outline" onClick={onRecheck} disabled={checking}>
+            {checking ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Repeat className="size-3.5" />
+            )}
+            {checking ? 'Looking…' : 'I have signed in'}
+          </Button>
+        )}
+        <Button size="sm" onClick={onSkip}>
+          Continue
+        </Button>
+      </div>
+
+      {/*
+        The honest reading of a positive from `codex login status`, which prints "Logged in using
+        ChatGPT" even with a spent refresh token. A no is a fact; a yes is a hope, and the small
+        turn on the next step is what settles it.
+      */}
+      {status?.installed && status.signedIn === null && !signedIn && (
+        <p className="mt-2 text-[11px] leading-snug text-muted-foreground text-pretty">
+          {entry.provider.label} does not report this reliably, so the check on the next step is
+          what will actually tell you.
+        </p>
+      )}
+    </Card>
   )
 }
 

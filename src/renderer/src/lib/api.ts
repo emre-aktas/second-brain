@@ -48,6 +48,8 @@ export const api = {
   clearEngineKey: (providerId: string) => call('engine:clearKey', { providerId }),
   testEngine: (providerId: string, model?: string) => call('engine:test', { providerId, model }),
   verifyEngine: (providerId: string, model?: string) => call('engine:verify', { providerId, model }),
+  cliStatus: (providerId: string, recheck?: boolean) =>
+    call('engine:cliStatus', { providerId, recheck }),
 
   /* updates */
   updateStatus: () => call('update:status'),

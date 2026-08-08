@@ -22,6 +22,18 @@ let cachedBinary: string | null | undefined
  * that installed the CLI, so PATH is only the first guess — the well-known
  * install locations are checked too before giving up.
  */
+/**
+ * Forget where the binary was, so a fresh look actually looks.
+ *
+ * The resolution is cached for the life of the process, which is right — it spawns `where` — and
+ * wrong at exactly one moment: the setup screen asking someone to install the CLI and then press
+ * "I've installed it". Without this they would be told it is still missing until they restarted
+ * the app, which reads as the install having failed.
+ */
+export function forgetClaudeBinary(): void {
+  cachedBinary = undefined
+}
+
 export function resolveClaudeBinary(override?: string): string | null {
   if (override && existsSync(override)) return override
   if (cachedBinary !== undefined) return cachedBinary

@@ -74,6 +74,70 @@ export type UsageDialect = 'stream_options' | 'openrouter' | 'none'
  */
 export type MaxTokensField = 'max_tokens' | 'max_completion_tokens'
 
+/**
+ * One way of getting a CLI onto the machine.
+ *
+ * Several per platform, because the right answer depends on what someone already has: a person
+ * with Homebrew wants one line, a person who has never opened a terminal wants the installer that
+ * asks for nothing. Ordered, and the first for a platform is the one to recommend.
+ */
+export interface CliInstallRoute {
+  id: string
+  label: string
+  platforms: ('win32' | 'darwin' | 'linux')[]
+  /** Which terminal to open, named the way the operating system names it. */
+  shell: string
+  command: string
+  /** Why you would pick this one over the others. */
+  hint?: string
+}
+
+/**
+ * How someone who has never used a terminal gets this engine working.
+ *
+ * The app used to answer "Codex is not installed on this machine" with a toast and stop, which
+ * is a dead end dressed as an error: it names a problem, offers no way through, and leaves a
+ * beginner to search for install instructions themselves and hope they find the current ones.
+ * Every command here is quoted from the vendor's own documentation rather than remembered.
+ */
+export interface CliSetup {
+  /** For someone who would rather click than type. */
+  downloadUrl: string
+  /** Ordered; the first that matches the platform is the recommended one. */
+  install: CliInstallRoute[]
+  /** What to run once it is installed, and what happens when you do. */
+  signIn: { command: string; blurb: string }
+  /** What the account has to be, where that is a real constraint. */
+  account?: string
+  /** How to confirm it landed, for the person whose terminal said nothing useful. */
+  verifyCommand: string
+}
+
+/**
+ * Where someone is in getting a CLI engine working, as three separate questions.
+ *
+ * Separate because they have three different fixes. The panel used to ask only the first and
+ * answer a no with a toast — "Codex is not installed on this machine" — which names a problem
+ * and offers no way through it.
+ */
+export interface CliStatus {
+  providerId: string
+  installed: boolean
+  path: string | null
+  version: string | null
+  /**
+   * Signed in — and null when that genuinely cannot be known.
+   *
+   * Codex is the null case and it matters: `codex login status` answers "Logged in using
+   * ChatGPT" while the refresh token is spent, so a *positive* from it means nothing. A negative
+   * is still trustworthy. "No" is a fact, "yes" is a hope, and the small turn at the end of
+   * setup is what settles it.
+   */
+  signedIn: boolean | null
+  /** What the CLI said about the account, when it said anything useful. */
+  account: string | null
+}
+
 export interface EngineProvider {
   id: string
   label: string
@@ -87,6 +151,8 @@ export interface EngineProvider {
   /** Where the user gets a key. Shown as a link. */
   keyUrl?: string
   needsKey: boolean
+  /** Install and sign-in instructions, for the engines that are a program on the machine. */
+  setup?: CliSetup
   reasoning: ReasoningDialect
   /** How to ask for token counts while streaming. Absent means `stream_options`. */
   usage?: UsageDialect
@@ -127,6 +193,65 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     baseUrl: '',
     secretRef: '',
     needsKey: false,
+    /*
+     * Quoted from code.claude.com/docs/en/setup, not remembered.
+     *
+     * The native installer leads because it is the only route with no prerequisite — npm needs
+     * Node 22, Homebrew needs Homebrew, and a beginner who has neither meets a second problem
+     * before the first one is solved.
+     */
+    setup: {
+      downloadUrl: 'https://code.claude.com/docs/en/setup',
+      verifyCommand: 'claude --version',
+      account: 'Claude Code needs a Pro, Max, Team or Enterprise plan. The free Claude.ai plan does not include it.',
+      signIn: {
+        command: 'claude',
+        blurb:
+          'Starts Claude Code and opens your browser to sign in. Once it says you are logged in you can close the terminal.'
+      },
+      install: [
+        {
+          id: 'native-win',
+          label: 'Windows installer',
+          platforms: ['win32'],
+          shell: 'PowerShell',
+          command: 'irm https://claude.ai/install.ps1 | iex',
+          hint: 'Nothing else needed. Open the Start menu, type PowerShell, and paste this in.'
+        },
+        {
+          id: 'native-unix',
+          label: 'Installer script',
+          platforms: ['darwin', 'linux'],
+          shell: 'Terminal',
+          command: 'curl -fsSL https://claude.ai/install.sh | bash',
+          hint: 'Nothing else needed, and it keeps itself up to date afterwards.'
+        },
+        {
+          id: 'brew',
+          label: 'Homebrew',
+          platforms: ['darwin', 'linux'],
+          shell: 'Terminal',
+          command: 'brew install --cask claude-code',
+          hint: 'If you already use Homebrew. You will have to upgrade it yourself.'
+        },
+        {
+          id: 'winget',
+          label: 'WinGet',
+          platforms: ['win32'],
+          shell: 'PowerShell',
+          command: 'winget install Anthropic.ClaudeCode',
+          hint: 'If you already use WinGet. You will have to upgrade it yourself.'
+        },
+        {
+          id: 'npm',
+          label: 'npm',
+          platforms: ['win32', 'darwin', 'linux'],
+          shell: 'Terminal',
+          command: 'npm install -g @anthropic-ai/claude-code',
+          hint: 'Needs Node.js 22 or later. Do not put sudo in front of it.'
+        }
+      ]
+    },
     reasoning: 'anthropic',
     metered: false
   },
@@ -140,6 +265,42 @@ export const ENGINE_PROVIDERS: EngineProvider[] = [
     secretRef: '',
     needsKey: false,
     keyUrl: 'https://developers.openai.com/codex/cli',
+    setup: {
+      downloadUrl: 'https://developers.openai.com/codex/cli',
+      verifyCommand: 'codex --version',
+      account: 'Signs in with your ChatGPT account.',
+      signIn: {
+        command: 'codex login',
+        blurb:
+          'Opens your browser to sign in with ChatGPT. This is also what to run when Codex stops working later — the session expires and says so only when a turn fails.'
+      },
+      install: [
+        {
+          id: 'winget',
+          label: 'Windows installer',
+          platforms: ['win32'],
+          shell: 'PowerShell',
+          command: 'winget install OpenAI.Codex',
+          hint: 'Nothing else needed. Open the Start menu, type PowerShell, and paste this in.'
+        },
+        {
+          id: 'native-unix',
+          label: 'Installer script',
+          platforms: ['darwin', 'linux'],
+          shell: 'Terminal',
+          command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+          hint: 'Nothing else needed.'
+        },
+        {
+          id: 'npm',
+          label: 'npm',
+          platforms: ['win32', 'darwin', 'linux'],
+          shell: 'Terminal',
+          command: 'npm install -g @openai/codex',
+          hint: 'Needs Node.js 16 or later. Do not put sudo in front of it.'
+        }
+      ]
+    },
     reasoning: 'reasoning_effort',
     metered: false
   },

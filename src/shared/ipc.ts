@@ -28,7 +28,7 @@ import type {
   WhatsNew,
   WorkspaceInfo
 } from './types'
-import type { EngineState, ModelInfo } from './engines'
+import type { CliStatus, EngineState, ModelInfo } from './engines'
 import type { GenUiSpec } from './genui'
 
 /**
@@ -307,6 +307,15 @@ export interface ApiMap {
    * Deliberately not automatic: on a metered provider it costs a fraction of a cent, and nothing
    * in this app spends the user's money on its own initiative.
    */
+  /**
+   * Where someone is in getting a CLI engine onto their machine.
+   *
+   * Asked repeatedly by the setup steps, which is why it is cheap: a path lookup and a local
+   * command, no network. `recheck` forgets the cached binary path first — without it, someone
+   * who installs the CLI while the app is open is told it is still missing until they restart,
+   * at the exact moment the screen is asking them to press "I've installed it".
+   */
+  'engine:cliStatus': (payload: { providerId: string; recheck?: boolean }) => CliStatus
   'engine:verify': (payload: { providerId: string; model?: string }) => {
     ok: boolean
     message: string
@@ -585,6 +594,7 @@ export const API_CHANNELS: ApiChannel[] = [
   'engine:setKey',
   'engine:clearKey',
   'engine:test',
+  'engine:cliStatus',
   'engine:verify',
   'graph:get',
   'graph:stats',
